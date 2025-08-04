@@ -125,11 +125,12 @@ require("dotenv").config()
 const app = express()
 const PORT = process.env.PORT || 3000
 
-// PRODUCTION CORS Configuration - Allows all origins for mobile apps
+// CORS Configuration - Only one configuration needed
 const corsOptions = {
- origin: [
+  origin: [
     'http://localhost:19006',  // Expo web dev server
     'http://localhost:3000',   // Common dev server
+    'http://localhost:8081',   // Expo mobile dev server
     'https://your-production-domain.com'  // Your production domain
   ],
   credentials: true,
@@ -146,7 +147,8 @@ app.use(express.urlencoded({ extended: true, limit: "50mb" }))
 // Handle preflight requests for all routes
 app.options("*", cors(corsOptions))
 
-// Additional CORS headers for mobile apps
+// REMOVE THIS ENTIRE BLOCK - IT'S CAUSING THE CONFLICT:
+/*
 app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin", "*")
   res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, PATCH")
@@ -157,6 +159,7 @@ app.use((req, res, next) => {
     next()
   }
 })
+*/
 
 // AWS S3 Configuration
 const s3 = new AWS.S3({
