@@ -13,18 +13,20 @@ const authenticateToken = (req, res, next) => {
 
   jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
     if (err) {
+      console.error("Token verification error:", err)
       return res.status(403).json({
         success: false,
         error: "Invalid or expired token",
       })
     }
+
     req.user = user
     next()
   })
 }
 
 const requireSuperAdmin = (req, res, next) => {
-  if (req.user.role !== "super_admin") {
+  if (req.user.type !== "super_admin") {
     return res.status(403).json({
       success: false,
       error: "Super admin access required",
@@ -33,11 +35,21 @@ const requireSuperAdmin = (req, res, next) => {
   next()
 }
 
-const requireAdmin = (req, res, next) => {
-  if (req.user.role !== "admin" && req.user.role !== "super_admin") {
+const requireDistributorAdmin = (req, res, next) => {
+  if (req.user.type !== "distributor_admin") {
     return res.status(403).json({
       success: false,
-      error: "Admin access required",
+      error: "Distributor admin access required",
+    })
+  }
+  next()
+}
+
+const requireDeliveryMan = (req, res, next) => {
+  if (req.user.type !== "delivery_man") {
+    return res.status(403).json({
+      success: false,
+      error: "Delivery man access required",
     })
   }
   next()
@@ -46,5 +58,6 @@ const requireAdmin = (req, res, next) => {
 module.exports = {
   authenticateToken,
   requireSuperAdmin,
-  requireAdmin,
+  requireDistributorAdmin,
+  requireDeliveryMan,
 }

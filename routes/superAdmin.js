@@ -11,11 +11,24 @@ const router = express.Router()
 // Get all pending distributor requests
 router.get("/distributor-requests", authenticateToken, requireSuperAdmin, async (req, res, next) => {
   try {
-    const requests = await DistributorRequest.find({ status: "pending" }).sort({ requestedAt: -1 })
+    const requests = await DistributorRequest.find({ status: "pending" }).sort({ createdAt: -1 })
+
+    // Format the data for frontend
+    const formattedRequests = requests.map((request) => ({
+      id: request._id,
+      sapCode: request.sapCode,
+      agencyName: request.agencyName,
+      adminName: request.adminName,
+      adminPhone: request.adminPhone,
+      deliveryMenCount: request.deliveryMen ? request.deliveryMen.length : 0,
+      requestDate: request.requestDate,
+      createdAt: request.createdAt,
+      status: request.status,
+    }))
 
     res.json({
       success: true,
-      data: requests,
+      data: formattedRequests,
     })
   } catch (error) {
     next(error)
@@ -47,18 +60,23 @@ router.post("/approve-distributor/:requestId", authenticateToken, requireSuperAd
       sapCode: request.sapCode,
       agencyName: request.agencyName,
       adminName: request.adminName,
-      password: request.password,
+      adminPhone: request.adminPhone,
+      adminPassword: request.adminPassword, // Already hashed
+      isActive: true,
+      createdAt: new Date(),
     })
 
     await distributor.save()
 
-    // Create delivery men
+    // Create delivery men if provided
     if (request.deliveryMen && request.deliveryMen.length > 0) {
       const deliveryMenData = request.deliveryMen.map((dm) => ({
         distributorId: distributor._id,
         name: dm.name,
         phone: dm.phone,
-        password: dm.password,
+        password: dm.password, // Already hashed
+        isActive: true,
+        createdAt: new Date(),
       }))
 
       await DeliveryMan.insertMany(deliveryMenData)
@@ -141,9 +159,16 @@ router.get("/dashboard-stats", authenticateToken, requireSuperAdmin, async (req,
         }),
       ])
 
-    // Get total sales
-    const salesResult = await Inspection.aggregate([{ $group: { _id: null, totalSales: { $sum: "$totalAmount" } } }])
-    const totalSales = salesResult.length > 0 ? salesResult[0].totalSales : 0
+    // Get total sales/revenue
+    const salesResult = await Inspection.aggregate([
+      {
+        $group: {
+          _id: null,
+          totalSales: { $sum: "$totalAmount" },
+        },
+      },
+    ])
+    const totalRevenue = salesResult.length > 0 ? salesResult[0].totalSales : 0
 
     res.json({
       success: true,
@@ -153,7 +178,7 @@ router.get("/dashboard-stats", authenticateToken, requireSuperAdmin, async (req,
         totalInspections,
         pendingRequests,
         todayInspections,
-        totalSales,
+        totalRevenue,
       },
     })
   } catch (error) {
@@ -164,11 +189,33 @@ router.get("/dashboard-stats", authenticateToken, requireSuperAdmin, async (req,
 // Get all distributors
 router.get("/distributors", authenticateToken, requireSuperAdmin, async (req, res, next) => {
   try {
-    const distributors = await Distributor.find({ isActive: true }).select("-password").sort({ createdAt: -1 })
+    const distributors = await Distributor.find({ isActive: true }).select("-adminPassword").sort({ createdAt: -1 })
+
+    // Get additional stats for each distributor
+    const distributorsWithStats = await Promise.all(
+      distributors.map(async (distributor) => {
+        const [deliveryMenCount, inspectionsCount] = await Promise.all([
+          DeliveryMan.countDocuments({ distributorId: distributor._id, isActive: true }),
+          Inspection.countDocuments({ distributorId: distributor._id }),
+        ])
+
+        return {
+          id: distributor._id,
+          sapCode: distributor.sapCode,
+          agencyName: distributor.agencyName,
+          adminName: distributor.adminName,
+          adminPhone: distributor.adminPhone,
+          isActive: distributor.isActive,
+          createdAt: distributor.createdAt,
+          deliveryMenCount,
+          inspectionsCount,
+        }
+      }),
+    )
 
     res.json({
       success: true,
-      data: distributors,
+      data: distributorsWithStats,
     })
   } catch (error) {
     next(error)
