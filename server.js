@@ -1,60 +1,39 @@
 const express = require("express")
 const mongoose = require("mongoose")
 const cors = require("cors")
-const multer = require("multer")
-const AWS = require("aws-sdk")
-const jwt = require("jsonwebtoken")
-const bcrypt = require("bcryptjs")
 const path = require("path")
 require("dotenv").config()
 
 const app = express()
 const PORT = process.env.PORT || 3000
 
-// CORS Configuration - Only one configuration needed
-const corsOptions = {
-  origin: [
-    'http://localhost:19006',  // Expo web dev server
-    'http://localhost:3000',   // Common dev server
-    'http://localhost:8081',   // Expo mobile dev server
-    'https://your-production-domain.com'  // Your production domain
-  ],
-  credentials: true,
-  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
-  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept", "Origin"],
-  exposedHeaders: ["Authorization"],
-}
+console.log("🚀 Starting LPG Inspection Backend Server...")
+console.log("📍 Port:", PORT)
+console.log("🌍 Environment:", process.env.NODE_ENV || "production")
 
-// Middleware
-app.use(cors(corsOptions))
+// PRODUCTION CORS Configuration - Allows all origins for mobile apps
+app.use(
+  cors({
+    origin: "*",
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept", "Origin"],
+    credentials: false,
+  }),
+)
+
 app.use(express.json({ limit: "50mb" }))
 app.use(express.urlencoded({ extended: true, limit: "50mb" }))
 
-// Handle preflight requests for all routes
-app.options("*", cors(corsOptions))
-
-// REMOVE THIS ENTIRE BLOCK - IT'S CAUSING THE CONFLICT:
-/*
-app.use((req, res, next) => {
+// Handle preflight requests
+app.options("*", (req, res) => {
   res.header("Access-Control-Allow-Origin", "*")
   res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, PATCH")
-  res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization")
-  if (req.method === "OPTIONS") {
-    res.sendStatus(200)
-  } else {
-    next()
-  }
-})
-*/
-
-// AWS S3 Configuration
-const s3 = new AWS.S3({
-  accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-  secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
-  region: process.env.AWS_REGION,
+  res.header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, Accept, Origin")
+  res.sendStatus(200)
 })
 
 // MongoDB Connection
+console.log("🔗 Connecting to MongoDB...")
 mongoose
   .connect(process.env.MONGODB_CONNECTION_STRING, {
     useNewUrlParser: true,
@@ -66,13 +45,6 @@ mongoose
     process.exit(1)
   })
 
-// Import Models
-const Distributor = require("./models/Distributor")
-const DeliveryMan = require("./models/DeliveryMan")
-const Product = require("./models/Product")
-const Inspection = require("./models/Inspection")
-const DistributorRequest = require("./models/DistributorRequest")
-
 // Import Routes
 const authRoutes = require("./routes/auth")
 const inspectionRoutes = require("./routes/inspections")
@@ -82,10 +54,7 @@ const dashboardRoutes = require("./routes/dashboard")
 const superAdminRoutes = require("./routes/superAdmin")
 const uploadRoutes = require("./routes/upload")
 
-// Import the centralized error handler
-const globalErrorHandler = require("./utils/errorHandler")
-
-// Routes
+// Mount Routes
 app.use("/api/auth", authRoutes)
 app.use("/api/inspections", inspectionRoutes)
 app.use("/api/products", productRoutes)
@@ -96,6 +65,7 @@ app.use("/api/upload", uploadRoutes)
 
 // Health check endpoint
 app.get("/api/health", (req, res) => {
+  console.log("🏥 Health check requested")
   res.json({
     success: true,
     message: "LPG Inspection API is running",
@@ -103,15 +73,29 @@ app.get("/api/health", (req, res) => {
     version: "1.0.0",
     environment: process.env.NODE_ENV || "production",
     mongodb: mongoose.connection.readyState === 1 ? "Connected" : "Disconnected",
+    port: PORT,
+    endpoints: {
+      auth: "/api/auth/*",
+      inspections: "/api/inspections/*",
+      products: "/api/products/*",
+      deliveryMen: "/api/delivery-men/*",
+      dashboard: "/api/dashboard/*",
+      superAdmin: "/api/super-admin/*",
+      upload: "/api/upload/*",
+    },
   })
 })
 
 // Root endpoint
 app.get("/", (req, res) => {
+  console.log("🏠 Root endpoint requested")
   res.json({
     success: true,
     message: "LPG Inspection API - Production Ready",
     version: "1.0.0",
+    timestamp: new Date().toISOString(),
+    status: "Server is running successfully",
+    mongodb: mongoose.connection.readyState === 1 ? "Connected" : "Disconnected",
     endpoints: {
       health: "/api/health",
       auth: "/api/auth/*",
@@ -125,8 +109,20 @@ app.get("/", (req, res) => {
   })
 })
 
+// Global error handling middleware
+app.use((error, req, res, next) => {
+  console.error("❌ Global error:", error)
+  res.status(500).json({
+    success: false,
+    error: "Internal server error",
+    message: error.message,
+    timestamp: new Date().toISOString(),
+  })
+})
+
 // 404 handler
 app.use("*", (req, res) => {
+  console.log("❌ 404 - Endpoint not found:", req.originalUrl)
   res.status(404).json({
     success: false,
     error: "Endpoint not found",
@@ -145,15 +141,28 @@ app.use("*", (req, res) => {
   })
 })
 
-// Global error handling middleware (must be last)
-app.use(globalErrorHandler)
-
 // Start server
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`🚀 Server running on port ${PORT}`)
   console.log(`📱 API Base URL: http://localhost:${PORT}/api`)
   console.log(`🏥 Health Check: http://localhost:${PORT}/api/health`)
-  console.log(`🌍 Production ready - accessible from anywhere`)
+  console.log(`🌍 Server is ready to accept connections`)
+  console.log(`📋 Available endpoints:`)
+  console.log(`   - POST /api/auth/validate-sap`)
+  console.log(`   - POST /api/auth/login`)
+  console.log(`   - POST /api/auth/register-distributor`)
+  console.log(`   - POST /api/auth/register`)
+  console.log(`   - GET  /api/super-admin/dashboard-stats`)
+  console.log(`   - GET  /api/super-admin/distributor-requests`)
+  console.log(`   - POST /api/super-admin/approve-distributor/:id`)
+  console.log(`   - POST /api/super-admin/reject-distributor/:id`)
+  console.log(`   - GET  /api/inspections`)
+  console.log(`   - POST /api/inspections`)
+  console.log(`   - GET  /api/products`)
+  console.log(`   - POST /api/products`)
+  console.log(`   - GET  /api/delivery-men`)
+  console.log(`   - POST /api/delivery-men`)
+  console.log(`   - GET  /api/dashboard/stats`)
 })
 
 module.exports = app

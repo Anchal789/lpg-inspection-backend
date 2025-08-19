@@ -1,309 +1,480 @@
-const express = require("express");
-const bcrypt = require("bcryptjs");
-const DeliveryMan = require("../models/DeliveryMan");
-const Product = require("../models/Product");
-const { authenticateToken, requireAdmin } = require("../middleware/auth");
+const express = require("express")
+const bcrypt = require("bcryptjs")
+const mongoose = require("mongoose")
+const DeliveryMan = require("../models/DeliveryMan")
+const Product = require("../models/Product")
+const Inspection = require("../models/Inspection")
+const { validateDeliveryManData, validateObjectId } = require("../utils/validators")
+const { sendSuccess, sendError, asyncHandler } = require("../utils/errorHandler")
+const auth = require("../middleware/auth")
 
-const router = express.Router();
+const router = express.Router()
 
-// Get delivery men by distributor
-router.get("/:distributorId", authenticateToken, async (req, res, next) => {
-	try {
-		const { distributorId } = req.params;
+// Get delivery men for a distributor
+router.get(
+  "/",
+  auth,
+  asyncHandler(async (req, res) => {
+    const { distributorId } = req.query
 
-		// Check access permissions
-		if (req.user.role === "admin" && req.user.id !== distributorId) {
-			return res.status(403).json({
-				success: false,
-				error: "Access denied",
-			});
-		}
+    if (!distributorId) {
+      return sendError(res, "Distributor ID is required", 400)
+    }
 
-		const deliveryMen = await DeliveryMan.find({
-			distributorId,
-			isActive: true,
-		})
-			.select("-password")
-			.sort({ name: 1 });
+    const deliveryMen = await DeliveryMan.find({
+      distributorId,
+      isActive: true,
+    })
+      .select("-password")
+      .sort({ createdAt: -1 })
 
-		res.json({
-			success: true,
-			data: deliveryMen,
-		});
-	} catch (error) {
-		next(error);
-	}
-});
+    return sendSuccess(res, deliveryMen, "Delivery men fetched successfully")
+  }),
+)
+
+// Get all delivery men (with pagination and filters)
+router.get(
+  "/all",
+  auth,
+  asyncHandler(async (req, res) => {
+    try {
+      const { page = 1, limit = 10, status, distributorId } = req.query
+
+      const query = {}
+
+      // Filter by status
+      if (status) {
+        query.status = status
+      }
+
+      // Filter by distributor
+      if (distributorId && validateObjectId(distributorId)) {
+        query.distributorId = distributorId
+      }
+
+      const deliveryMen = await DeliveryMan.find(query)
+        .populate("distributorId", "name email phone")
+        .select("-password")
+        .sort({ createdAt: -1 })
+        .limit(limit * 1)
+        .skip((page - 1) * limit)
+
+      const total = await DeliveryMan.countDocuments(query)
+
+      res.json({
+        success: true,
+        deliveryMen,
+        pagination: {
+          current: page,
+          pages: Math.ceil(total / limit),
+          total,
+        },
+      })
+    } catch (error) {
+      console.error("Get delivery men error:", error)
+      sendError(res, error, "Failed to get delivery men")
+    }
+  }),
+)
+
+// Get delivery man by ID
+router.get(
+  "/:id",
+  auth,
+  asyncHandler(async (req, res) => {
+    const { id } = req.params
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return sendError(res, "Invalid delivery man ID", 400)
+    }
+
+    const deliveryMan = await DeliveryMan.findById(id)
+      .populate("distributorId", "companyName ownerName phone email")
+      .select("-password")
+
+    if (!deliveryMan) {
+      return sendError(res, "Delivery man not found", 404)
+    }
+
+    // Get additional stats
+    const [inspectionCount, recentInspections] = await Promise.all([
+      Inspection.countDocuments({ deliveryManId: id }),
+      Inspection.find({ deliveryManId: id })
+        .populate("products.productId", "name type serialNumber")
+        .sort({ inspectionDate: -1 })
+        .limit(5),
+    ])
+
+    return sendSuccess(
+      res,
+      {
+        deliveryMan: {
+          ...deliveryMan.toObject(),
+          inspectionCount,
+          recentInspections,
+        },
+      },
+      "Delivery man fetched successfully",
+    )
+  }),
+)
 
 // Create new delivery man
-router.post("/", authenticateToken, requireAdmin, async (req, res, next) => {
-	try {
-		const { name, phone, password } = req.body;
+router.post(
+  "/",
+  auth,
+  asyncHandler(async (req, res) => {
+    console.log("👤 Creating new delivery man:", { ...req.body, password: "***" })
 
-		if (!name || !phone || !password) {
-			return res.status(400).json({
-				success: false,
-				error: "Name, phone, and password are required",
-			});
-		}
+    const { name, phone, password, sapCode, distributorId } = req.body
 
-		// Check if phone number already exists
-		const existingDeliveryMan = await DeliveryMan.findOne({ phone });
-		if (existingDeliveryMan) {
-			return res.status(409).json({
-				success: false,
-				error: "Phone number already registered",
-			});
-		}
+    // Validate required fields
+    if (!name || !phone || !password || !sapCode || !distributorId) {
+      return sendError(res, "All fields are required")
+    }
 
-		// Hash password
-		const hashedPassword = await bcrypt.hash(password, 10);
+    // Check permissions
+    if (req.user.role === "distributor_admin" && req.user.distributorId !== distributorId) {
+      return sendError(res, "Access denied", 403)
+    }
 
-		const deliveryMan = new DeliveryMan({
-			distributorId: req.user.id,
-			name,
-			phone,
-			password: hashedPassword,
-		});
+    // Check if SAP code already exists
+    const existingSapCode = await DeliveryMan.findOne({ sapCode })
+    if (existingSapCode) {
+      return sendError(res, "SAP code already exists", 409)
+    }
 
-		await deliveryMan.save();
+    // Check if phone already exists
+    const existingPhone = await DeliveryMan.findOne({ phone })
+    if (existingPhone) {
+      return sendError(res, "Phone number already registered", 409)
+    }
 
-		// Remove password from response
-		const deliveryManResponse = deliveryMan.toObject();
-		delete deliveryManResponse.password;
+    // Hash password
+    const hashedPassword = await bcrypt.hash(password, 10)
 
-		res.status(201).json({
-			success: true,
-			data: deliveryManResponse,
-			message: "Delivery man created successfully",
-		});
-	} catch (error) {
-		next(error);
-	}
-});
+    // Create delivery man
+    const deliveryMan = new DeliveryMan({
+      name,
+      phone,
+      password: hashedPassword,
+      sapCode,
+      distributorId,
+      isActive: true,
+    })
+
+    await deliveryMan.save()
+
+    // Return without password
+    const deliveryManResponse = await DeliveryMan.findById(deliveryMan._id)
+      .populate("distributorId", "companyName")
+      .select("-password")
+
+    return sendSuccess(
+      res,
+      {
+        deliveryMan: deliveryManResponse,
+      },
+      "Delivery man created successfully",
+    )
+  }),
+)
 
 // Assign product to delivery man
 router.post(
-	"/:deliveryManId/assign-product",
-	authenticateToken,
-	requireAdmin,
-	async (req, res, next) => {
-		try {
-			const { deliveryManId } = req.params;
-			const { productId, quantity, price, minPrice } = req.body;
+  "/:id/assign-product",
+  auth,
+  asyncHandler(async (req, res) => {
+    const { id } = req.params
+    const { productId, quantity = 1 } = req.body
 
-			if (!productId || !quantity || !price || minPrice === undefined) {
-				return res.status(400).json({
-					success: false,
-					error: "Product ID, quantity, price, and minimum price are required",
-				});
-			}
+    if (!mongoose.Types.ObjectId.isValid(id) || !mongoose.Types.ObjectId.isValid(productId)) {
+      return sendError(res, "Invalid ID provided", 400)
+    }
 
-			// Verify delivery man belongs to this distributor
-			const deliveryMan = await DeliveryMan.findOne({
-				_id: deliveryManId,
-				distributorId: req.user.id,
-			});
+    const [deliveryMan, product] = await Promise.all([DeliveryMan.findById(id), Product.findById(productId)])
 
-			if (!deliveryMan) {
-				return res.status(404).json({
-					success: false,
-					error: "Delivery man not found",
-				});
-			}
+    if (!deliveryMan) {
+      return sendError(res, "Delivery man not found", 404)
+    }
 
-			// Verify product exists and belongs to this distributor
-			const product = await Product.findOne({
-				_id: productId,
-				distributorId: req.user.id,
-				isActive: true,
-			});
+    if (!product) {
+      return sendError(res, "Product not found", 404)
+    }
 
-			if (!product) {
-				return res.status(404).json({
-					success: false,
-					error: "Product not found",
-				});
-			}
+    // Check permissions
+    if (req.user.role === "distributor_admin" && deliveryMan.distributorId.toString() !== req.user.distributorId) {
+      return sendError(res, "Access denied", 403)
+    }
 
-			// Check if enough quantity available
-			if (product.quantity < quantity) {
-				return res.status(400).json({
-					success: false,
-					error: "Insufficient product quantity",
-				});
-			}
+    // Check if product belongs to the same distributor
+    if (product.distributorId.toString() !== deliveryMan.distributorId.toString()) {
+      return sendError(res, "Product does not belong to the same distributor", 400)
+    }
 
-			// Validate price constraints
-			if (price < minPrice) {
-				return res.status(400).json({
-					success: false,
-					error: "Price cannot be below minimum price",
-				});
-			}
+    // Check stock availability
+    if (product.stock < quantity) {
+      return sendError(res, "Insufficient stock available", 400)
+    }
 
-			// Add product to delivery man's assigned products
-			deliveryMan.assignedProducts.push({
-				productId,
-				quantity,
-				price,
-				minPrice,
-			});
+    // Update product stock
+    product.stock -= quantity
+    await product.save()
 
-			await deliveryMan.save();
+    // Add to delivery man's assigned products
+    if (!deliveryMan.assignedProducts) {
+      deliveryMan.assignedProducts = []
+    }
 
-			// Update product quantity
-			product.quantity -= quantity;
-			await product.save();
+    const existingAssignment = deliveryMan.assignedProducts.find((ap) => ap.productId.toString() === productId)
 
-			res.json({
-				success: true,
-				message: "Product assigned successfully",
-				data: {
-					deliveryManId: deliveryMan._id,
-					productName: product.name,
-					assignedQuantity: quantity,
-					assignedPrice: price,
-				},
-			});
-		} catch (error) {
-			next(error);
-		}
-	}
-);
+    if (existingAssignment) {
+      existingAssignment.quantity += quantity
+      existingAssignment.assignedAt = new Date()
+    } else {
+      deliveryMan.assignedProducts.push({
+        productId,
+        quantity,
+        assignedAt: new Date(),
+      })
+    }
 
-// Get delivery man details
-router.get(
-	"/single/:deliveryManId",
-	authenticateToken,
-	async (req, res, next) => {
-		try {
-			const { deliveryManId } = req.params;
+    await deliveryMan.save()
 
-			const deliveryMan = await DeliveryMan.findById(deliveryManId)
-				.select("-password")
-				.populate("assignedProducts.productId", "name category");
+    const updatedDeliveryMan = await DeliveryMan.findById(id)
+      .populate("assignedProducts.productId", "name type serialNumber")
+      .select("-password")
 
-			if (!deliveryMan) {
-				return res.status(404).json({
-					success: false,
-					error: "Delivery man not found",
-				});
-			}
-
-			// Check access permissions
-			if (
-				req.user.role === "admin" &&
-				req.user.id !== deliveryMan.distributorId.toString()
-			) {
-				return res.status(403).json({
-					success: false,
-					error: "Access denied",
-				});
-			}
-
-			res.json({
-				success: true,
-				data: deliveryMan,
-			});
-		} catch (error) {
-			next(error);
-		}
-	}
-);
+    return sendSuccess(
+      res,
+      {
+        deliveryMan: updatedDeliveryMan,
+        message: `${quantity} unit(s) of ${product.name} assigned successfully`,
+      },
+      "Product assigned successfully",
+    )
+  }),
+)
 
 // Update delivery man
 router.put(
-	"/:deliveryManId",
-	authenticateToken,
-	requireAdmin,
-	async (req, res, next) => {
-		try {
-			const { deliveryManId } = req.params;
-			const { name, phone, password } = req.body;
+  "/:id",
+  auth,
+  asyncHandler(async (req, res) => {
+    const { id } = req.params
+    const updates = req.body
 
-			const deliveryMan = await DeliveryMan.findOne({
-				_id: deliveryManId,
-				distributorId: req.user.id,
-			});
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return sendError(res, "Invalid delivery man ID", 400)
+    }
 
-			if (!deliveryMan) {
-				return res.status(404).json({
-					success: false,
-					error: "Delivery man not found",
-				});
-			}
+    const deliveryMan = await DeliveryMan.findById(id)
+    if (!deliveryMan) {
+      return sendError(res, "Delivery man not found", 404)
+    }
 
-			// Update fields
-			if (name) deliveryMan.name = name;
-			if (phone) {
-				// Check if new phone number is already taken
-				const existingDeliveryMan = await DeliveryMan.findOne({
-					phone,
-					_id: { $ne: deliveryManId },
-				});
-				if (existingDeliveryMan) {
-					return res.status(409).json({
-						success: false,
-						error: "Phone number already registered",
-					});
-				}
-				deliveryMan.phone = phone;
-			}
-			if (password) {
-				deliveryMan.password = await bcrypt.hash(password, 10);
-			}
+    // Check permissions
+    if (req.user.role === "distributor_admin" && deliveryMan.distributorId.toString() !== req.user.distributorId) {
+      return sendError(res, "Access denied", 403)
+    }
 
-			await deliveryMan.save();
+    // Handle password update
+    if (updates.password) {
+      updates.password = await bcrypt.hash(updates.password, 10)
+    }
 
-			// Remove password from response
-			const deliveryManResponse = deliveryMan.toObject();
-			delete deliveryManResponse.password;
+    // Update delivery man
+    Object.assign(deliveryMan, updates)
+    deliveryMan.updatedAt = new Date()
+    await deliveryMan.save()
 
-			res.json({
-				success: true,
-				data: deliveryManResponse,
-				message: "Delivery man updated successfully",
-			});
-		} catch (error) {
-			next(error);
-		}
-	}
-);
+    const updatedDeliveryMan = await DeliveryMan.findById(id)
+      .populate("distributorId", "companyName")
+      .select("-password")
+
+    return sendSuccess(
+      res,
+      {
+        deliveryMan: updatedDeliveryMan,
+      },
+      "Delivery man updated successfully",
+    )
+  }),
+)
+
+// Delete delivery man
+router.delete(
+  "/:id",
+  auth,
+  asyncHandler(async (req, res) => {
+    const { id } = req.params
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return sendError(res, "Invalid delivery man ID", 400)
+    }
+
+    const deliveryMan = await DeliveryMan.findById(id)
+    if (!deliveryMan) {
+      return sendError(res, "Delivery man not found", 404)
+    }
+
+    // Check permissions
+    if (req.user.role === "distributor_admin" && deliveryMan.distributorId.toString() !== req.user.distributorId) {
+      return sendError(res, "Access denied", 403)
+    }
+
+    await DeliveryMan.findByIdAndDelete(id)
+
+    return sendSuccess(
+      res,
+      {
+        message: "Delivery man deleted successfully",
+      },
+      "Delivery man deleted",
+    )
+  }),
+)
+
+// Approve/Reject delivery man
+router.patch(
+  "/:id/status",
+  auth,
+  asyncHandler(async (req, res) => {
+    const { id } = req.params
+    const { status } = req.body
+
+    if (!["approved", "rejected", "pending"].includes(status)) {
+      return sendError(res, "Invalid status. Must be 'approved', 'rejected', or 'pending'", 400)
+    }
+
+    const deliveryMan = await DeliveryMan.findById(id)
+    if (!deliveryMan) {
+      return sendError(res, "Delivery man not found", 404)
+    }
+
+    deliveryMan.status = status
+    deliveryMan.updatedAt = new Date()
+    await deliveryMan.save()
+
+    await deliveryMan.populate("distributorId", "name email phone")
+
+    // Remove password from response
+    const deliveryManResponse = deliveryMan.toObject()
+    delete deliveryManResponse.password
+
+    res.json({
+      success: true,
+      message: `Delivery man ${status} successfully`,
+      deliveryMan: deliveryManResponse,
+    })
+  }),
+)
+
+// Get delivery men by distributor
+router.get(
+  "/distributor/:distributorId",
+  auth,
+  asyncHandler(async (req, res) => {
+    const { distributorId } = req.params
+    const { page = 1, limit = 10, status } = req.query
+
+    if (!validateObjectId(distributorId)) {
+      return sendError(res, "Invalid distributor ID", 400)
+    }
+
+    const query = { distributorId }
+    if (status) {
+      query.status = status
+    }
+
+    const deliveryMen = await DeliveryMan.find(query)
+      .populate("distributorId", "name email phone")
+      .select("-password")
+      .sort({ createdAt: -1 })
+      .limit(limit * 1)
+      .skip((page - 1) * limit)
+
+    const total = await DeliveryMan.countDocuments(query)
+
+    res.json({
+      success: true,
+      deliveryMen,
+      pagination: {
+        current: page,
+        pages: Math.ceil(total / limit),
+        total,
+      },
+    })
+  }),
+)
+
+// Get assigned products for delivery man
+router.get(
+  "/:id/assigned-products",
+  auth,
+  asyncHandler(async (req, res) => {
+    const { id } = req.params
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return sendError(res, "Invalid delivery man ID", 400)
+    }
+
+    const deliveryMan = await DeliveryMan.findById(id)
+      .populate("assignedProducts.productId", "name type serialNumber price")
+      .select("assignedProducts")
+
+    if (!deliveryMan) {
+      return sendError(res, "Delivery man not found", 404)
+    }
+
+    // Check permissions
+    if (req.user.role === "delivery_man" && req.user.id !== id) {
+      return sendError(res, "Access denied", 403)
+    }
+
+    return sendSuccess(
+      res,
+      {
+        assignedProducts: deliveryMan.assignedProducts || [],
+      },
+      "Assigned products fetched successfully",
+    )
+  }),
+)
 
 // Deactivate delivery man
-router.delete(
-	"/:deliveryManId",
-	authenticateToken,
-	requireAdmin,
-	async (req, res, next) => {
-		try {
-			const { deliveryManId } = req.params;
+router.post(
+  "/:id/deactivate",
+  auth,
+  asyncHandler(async (req, res) => {
+    const { id } = req.params
 
-			const deliveryMan = await DeliveryMan.findOne({
-				_id: deliveryManId,
-				distributorId: req.user.id,
-			});
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return sendError(res, "Invalid delivery man ID", 400)
+    }
 
-			if (!deliveryMan) {
-				return res.status(404).json({
-					success: false,
-					error: "Delivery man not found",
-				});
-			}
+    const deliveryMan = await DeliveryMan.findById(id)
+    if (!deliveryMan) {
+      return sendError(res, "Delivery man not found", 404)
+    }
 
-			// Soft delete
-			deliveryMan.isActive = false;
-			await deliveryMan.save();
+    // Check permissions
+    if (req.user.role === "distributor_admin" && deliveryMan.distributorId.toString() !== req.user.distributorId) {
+      return sendError(res, "Access denied", 403)
+    }
 
-			res.json({
-				success: true,
-				message: "Delivery man deactivated successfully",
-			});
-		} catch (error) {
-			next(error);
-		}
-	}
-);
+    deliveryMan.isActive = false
+    deliveryMan.updatedAt = new Date()
+    await deliveryMan.save()
 
-module.exports = router;
+    return sendSuccess(
+      res,
+      {
+        message: "Delivery man deactivated successfully",
+      },
+      "Delivery man deactivated",
+    )
+  }),
+)
+
+module.exports = router

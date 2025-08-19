@@ -1,113 +1,162 @@
 const express = require("express")
 const multer = require("multer")
-const AWS = require("aws-sdk")
-const { v4: uuidv4 } = require("uuid")
-const { authenticateToken } = require("../middleware/auth")
+const path = require("path")
+const fs = require("fs")
+const { sendSuccess, sendError, asyncHandler } = require("../utils/errorHandler")
+const auth = require("../middleware/auth")
 
 const router = express.Router()
 
-// Configure AWS S3
-const s3 = new AWS.S3({
-  accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-  secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
-  region: process.env.AWS_REGION,
+// Create uploads directory if it doesn't exist
+const uploadsDir = path.join(__dirname, "../uploads")
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true })
+}
+
+// Configure multer for file uploads
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const uploadPath = path.join(uploadsDir, "inspections")
+    if (!fs.existsSync(uploadPath)) {
+      fs.mkdirSync(uploadPath, { recursive: true })
+    }
+    cb(null, uploadPath)
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9)
+    cb(null, file.fieldname + "-" + uniqueSuffix + path.extname(file.originalname))
+  },
 })
 
-// Configure multer for memory storage
+const fileFilter = (req, file, cb) => {
+  // Allow images only
+  if (file.mimetype.startsWith("image/")) {
+    cb(null, true)
+  } else {
+    cb(new Error("Only image files are allowed"), false)
+  }
+}
+
 const upload = multer({
-  storage: multer.memoryStorage(),
+  storage: storage,
   limits: {
     fileSize: 10 * 1024 * 1024, // 10MB limit
+    files: 10, // Maximum 10 files
   },
-  fileFilter: (req, file, cb) => {
-    if (file.mimetype.startsWith("image/")) {
-      cb(null, true)
-    } else {
-      cb(new Error("Only image files are allowed"), false)
-    }
-  },
+  fileFilter: fileFilter,
 })
 
-// Upload image to S3
-router.post("/image", authenticateToken, upload.single("image"), async (req, res, next) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({
-        success: false,
-        error: "No image file provided",
-      })
-    }
-
-    const { inspectionId } = req.body
-    const fileExtension = req.file.originalname.split(".").pop()
-    const fileName = `inspections/${inspectionId}/${uuidv4()}.${fileExtension}`
-
-    const uploadParams = {
-      Bucket: process.env.S3_BUCKET_NAME,
-      Key: fileName,
-      Body: req.file.buffer,
-      ContentType: req.file.mimetype,
-      ACL: "public-read",
-    }
-
-    const result = await s3.upload(uploadParams).promise()
-
-    res.json({
-      success: true,
-      data: {
-        imageUrl: result.Location,
-        fileName: fileName,
-        fileSize: req.file.size,
-        mimeType: req.file.mimetype,
-      },
-    })
-  } catch (error) {
-    next(error)
-  }
-})
-
-// Upload multiple images
-router.post("/images", authenticateToken, upload.array("images", 5), async (req, res, next) => {
-  try {
+// Upload inspection images
+router.post(
+  "/inspection-images",
+  auth,
+  upload.array("images", 10),
+  asyncHandler(async (req, res) => {
     if (!req.files || req.files.length === 0) {
-      return res.status(400).json({
-        success: false,
-        error: "No image files provided",
-      })
+      return sendError(res, "No files uploaded", 400)
     }
 
-    const { inspectionId } = req.body
-    const uploadPromises = req.files.map(async (file) => {
-      const fileExtension = file.originalname.split(".").pop()
-      const fileName = `inspections/${inspectionId}/${uuidv4()}.${fileExtension}`
+    const uploadedFiles = req.files.map((file) => ({
+      filename: file.filename,
+      originalName: file.originalname,
+      path: `/uploads/inspections/${file.filename}`,
+      size: file.size,
+      mimetype: file.mimetype,
+    }))
 
-      const uploadParams = {
-        Bucket: process.env.S3_BUCKET_NAME,
-        Key: fileName,
-        Body: file.buffer,
-        ContentType: file.mimetype,
-        ACL: "public-read",
-      }
+    return sendSuccess(
+      res,
+      {
+        files: uploadedFiles,
+      },
+      "Files uploaded successfully",
+    )
+  }),
+)
 
-      const result = await s3.upload(uploadParams).promise()
+// Upload single image
+router.post(
+  "/single-image",
+  auth,
+  upload.single("image"),
+  asyncHandler(async (req, res) => {
+    if (!req.file) {
+      return sendError(res, "No file uploaded", 400)
+    }
 
-      return {
-        imageUrl: result.Location,
-        fileName: fileName,
-        fileSize: file.size,
-        mimeType: file.mimetype,
-      }
+    const uploadedFile = {
+      filename: req.file.filename,
+      originalName: req.file.originalname,
+      path: `/uploads/inspections/${req.file.filename}`,
+      size: req.file.size,
+      mimetype: req.file.mimetype,
+    }
+
+    return sendSuccess(
+      res,
+      {
+        file: uploadedFile,
+      },
+      "File uploaded successfully",
+    )
+  }),
+)
+
+// Get uploaded file
+router.get("/file/:filename", (req, res) => {
+  const { filename } = req.params
+  const filePath = path.join(uploadsDir, "inspections", filename)
+
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({
+      success: false,
+      message: "File not found",
     })
-
-    const uploadedImages = await Promise.all(uploadPromises)
-
-    res.json({
-      success: true,
-      data: uploadedImages,
-    })
-  } catch (error) {
-    next(error)
   }
+
+  res.sendFile(filePath)
+})
+
+// Delete uploaded file
+router.delete(
+  "/file/:filename",
+  auth,
+  asyncHandler(async (req, res) => {
+    const { filename } = req.params
+    const filePath = path.join(uploadsDir, "inspections", filename)
+
+    if (!fs.existsSync(filePath)) {
+      return sendError(res, "File not found", 404)
+    }
+
+    fs.unlinkSync(filePath)
+
+    return sendSuccess(
+      res,
+      {
+        message: "File deleted successfully",
+      },
+      "File deleted",
+    )
+  }),
+)
+
+// Error handling middleware for multer
+router.use((error, req, res, next) => {
+  if (error instanceof multer.MulterError) {
+    if (error.code === "LIMIT_FILE_SIZE") {
+      return sendError(res, "File too large. Maximum size is 10MB", 400)
+    }
+    if (error.code === "LIMIT_FILE_COUNT") {
+      return sendError(res, "Too many files. Maximum is 10 files", 400)
+    }
+  }
+
+  if (error.message === "Only image files are allowed") {
+    return sendError(res, "Only image files are allowed", 400)
+  }
+
+  return sendError(res, error.message || "Upload failed", 500)
 })
 
 module.exports = router

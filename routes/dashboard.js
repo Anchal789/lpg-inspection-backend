@@ -1,269 +1,126 @@
-const express = require("express");
-const Inspection = require("../models/Inspection");
-const DeliveryMan = require("../models/DeliveryMan");
-const Product = require("../models/Product");
-const { authenticateToken, requireAdmin } = require("../middleware/auth");
+const express = require("express")
+const router = express.Router()
+const { sendSuccess, sendError, asyncHandler, authenticateToken } = require("../utils/errorHandler")
+const Inspection = require("../models/Inspection")
+const Product = require("../models/Product")
+const DeliveryMan = require("../models/DeliveryMan")
 
-const router = express.Router();
-
-// Get dashboard statistics for distributor admin
+// Get dashboard statistics
 router.get(
-	"/stats/:distributorId",
-	authenticateToken,
-	requireAdmin,
-	async (req, res, next) => {
-		try {
-			const { distributorId } = req.params;
+  "/stats",
+  authenticateToken,
+  asyncHandler(async (req, res) => {
+    const { distributorId } = req.query
 
-			// Verify access
-			if (req.user.id !== distributorId) {
-				return res.status(403).json({
-					success: false,
-					error: "Access denied",
-				});
-			}
+    if (!distributorId) {
+      return sendError(res, "Distributor ID is required", 400)
+    }
 
-			// Get current date range
-			const today = new Date();
-			today.setHours(0, 0, 0, 0);
-			const tomorrow = new Date(today);
-			tomorrow.setDate(tomorrow.getDate() + 1);
+    try {
+      // Get total inspections
+      const totalInspections = await Inspection.countDocuments({ distributorId })
 
-			const thisWeekStart = new Date(today);
-			thisWeekStart.setDate(today.getDate() - today.getDay());
+      // Get inspections this month
+      const startOfMonth = new Date()
+      startOfMonth.setDate(1)
+      startOfMonth.setHours(0, 0, 0, 0)
 
-			const thisMonthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+      const monthlyInspections = await Inspection.countDocuments({
+        distributorId,
+        createdAt: { $gte: startOfMonth },
+      })
 
-			// Parallel queries for better performance
-			const [
-				totalInspections,
-				todayInspections,
-				thisWeekInspections,
-				thisMonthInspections,
-				totalDeliveryMen,
-				activeProducts,
-				salesData,
-				topPerformers,
-			] = await Promise.all([
-				// Total inspections
-				Inspection.countDocuments({ distributorId }),
+      // Get total products
+      const totalProducts = await Product.countDocuments({ distributorId })
 
-				// Today's inspections
-				Inspection.countDocuments({
-					distributorId,
-					inspectionDate: { $gte: today, $lt: tomorrow },
-				}),
+      // Get total delivery men
+      const totalDeliveryMen = await DeliveryMan.countDocuments({ distributorId })
 
-				// This week's inspections
-				Inspection.countDocuments({
-					distributorId,
-					inspectionDate: { $gte: thisWeekStart },
-				}),
+      // Get recent inspections
+      const recentInspections = await Inspection.find({ distributorId })
+        .sort({ createdAt: -1 })
+        .limit(5)
+        .populate("deliveryManId", "name phone")
+        .populate("productId", "name type")
 
-				// This month's inspections
-				Inspection.countDocuments({
-					distributorId,
-					inspectionDate: { $gte: thisMonthStart },
-				}),
+      // Get inspection status breakdown
+      const statusBreakdown = await Inspection.aggregate([
+        { $match: { distributorId } },
+        { $group: { _id: "$status", count: { $sum: 1 } } },
+      ])
 
-				// Total delivery men
-				DeliveryMan.countDocuments({ distributorId, isActive: true }),
+      const stats = {
+        totalInspections,
+        monthlyInspections,
+        totalProducts,
+        totalDeliveryMen,
+        recentInspections,
+        statusBreakdown,
+      }
 
-				// Active products
-				Product.countDocuments({ distributorId, isActive: true }),
+      sendSuccess(res, stats, "Dashboard statistics retrieved successfully")
+    } catch (error) {
+      console.error("Dashboard stats error:", error)
+      sendError(res, "Failed to retrieve dashboard statistics", 500, error.message)
+    }
+  }),
+)
 
-				// Sales data
-				Inspection.aggregate([
-					{ $match: { distributorId: distributorId } },
-					{
-						$group: {
-							_id: null,
-							totalSales: { $sum: "$totalAmount" },
-							averageOrderValue: { $avg: "$totalAmount" },
-						},
-					},
-				]),
-
-				// Top performing delivery men
-				Inspection.aggregate([
-					{ $match: { distributorId: distributorId } },
-					{
-						$group: {
-							_id: "$deliveryManId",
-							totalInspections: { $sum: 1 },
-							totalSales: { $sum: "$totalAmount" },
-						},
-					},
-					{ $sort: { totalSales: -1 } },
-					{ $limit: 5 },
-					{
-						$lookup: {
-							from: "deliverymen",
-							localField: "_id",
-							foreignField: "_id",
-							as: "deliveryMan",
-						},
-					},
-					{ $unwind: "$deliveryMan" },
-					{
-						$project: {
-							name: "$deliveryMan.name",
-							totalInspections: 1,
-							totalSales: 1,
-						},
-					},
-				]),
-			]);
-
-			// Weekly inspection trend
-			const weeklyTrend = await Inspection.aggregate([
-				{
-					$match: {
-						distributorId: distributorId,
-						inspectionDate: { $gte: thisWeekStart },
-					},
-				},
-				{
-					$group: {
-						_id: { $dayOfWeek: "$inspectionDate" },
-						count: { $sum: 1 },
-						sales: { $sum: "$totalAmount" },
-					},
-				},
-				{ $sort: { _id: 1 } },
-			]);
-
-			const totalSales = salesData.length > 0 ? salesData[0].totalSales : 0;
-			const averageOrderValue =
-				salesData.length > 0 ? salesData[0].averageOrderValue : 0;
-
-			res.json({
-				success: true,
-				data: {
-					overview: {
-						totalInspections,
-						todayInspections,
-						thisWeekInspections,
-						thisMonthInspections,
-						totalDeliveryMen,
-						activeProducts,
-						totalSales,
-						averageOrderValue: Math.round(averageOrderValue || 0),
-					},
-					topPerformers,
-					weeklyTrend,
-					lastUpdated: new Date().toISOString(),
-				},
-			});
-		} catch (error) {
-			next(error);
-		}
-	}
-);
-
-// Get delivery man performance
+// Get weekly report
 router.get(
-	"/delivery-man/:deliveryManId/performance",
-	authenticateToken,
-	async (req, res, next) => {
-		try {
-			const { deliveryManId } = req.params;
+  "/weekly-report",
+  authenticateToken,
+  asyncHandler(async (req, res) => {
+    const { distributorId, week } = req.query
 
-			// Get delivery man details
-			const deliveryMan = await DeliveryMan.findById(deliveryManId).select(
-				"-password"
-			);
+    if (!distributorId) {
+      return sendError(res, "Distributor ID is required", 400)
+    }
 
-			if (!deliveryMan) {
-				return res.status(404).json({
-					success: false,
-					error: "Delivery man not found",
-				});
-			}
+    try {
+      // Calculate week start and end dates
+      const weekNumber = Number.parseInt(week) || 0
+      const startOfWeek = new Date()
+      startOfWeek.setDate(startOfWeek.getDate() - startOfWeek.getDay() - weekNumber * 7)
+      startOfWeek.setHours(0, 0, 0, 0)
 
-			// Check access permissions
-			if (req.user.role === "delivery" && req.user.id !== deliveryManId) {
-				return res.status(403).json({
-					success: false,
-					error: "Access denied",
-				});
-			}
+      const endOfWeek = new Date(startOfWeek)
+      endOfWeek.setDate(endOfWeek.getDate() + 6)
+      endOfWeek.setHours(23, 59, 59, 999)
 
-			if (
-				req.user.role === "admin" &&
-				req.user.id !== deliveryMan.distributorId.toString()
-			) {
-				return res.status(403).json({
-					success: false,
-					error: "Access denied",
-				});
-			}
+      // Get inspections for the week
+      const weeklyInspections = await Inspection.find({
+        distributorId,
+        createdAt: { $gte: startOfWeek, $lte: endOfWeek },
+      })
+        .populate("deliveryManId", "name phone")
+        .populate("productId", "name type")
+        .sort({ createdAt: -1 })
 
-			// Get performance data
-			const today = new Date();
-			today.setHours(0, 0, 0, 0);
-			const thisMonthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+      // Group by day
+      const dailyBreakdown = {}
+      const days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
 
-			const [monthlyInspections, monthlyPerformance] = await Promise.all([
-				// Monthly inspections count
-				Inspection.countDocuments({
-					deliveryManId,
-					inspectionDate: { $gte: thisMonthStart },
-				}),
+      days.forEach((day, index) => {
+        dailyBreakdown[day] = weeklyInspections.filter((inspection) => {
+          return new Date(inspection.createdAt).getDay() === index
+        })
+      })
 
-				// Monthly performance details
-				Inspection.aggregate([
-					{
-						$match: {
-							deliveryManId: deliveryManId,
-							inspectionDate: { $gte: thisMonthStart },
-						},
-					},
-					{
-						$group: {
-							_id: null,
-							totalSales: { $sum: "$totalAmount" },
-							averageOrderValue: { $avg: "$totalAmount" },
-							totalPassedQuestions: { $sum: "$passedQuestions" },
-							totalQuestions: {
-								$sum: { $add: ["$passedQuestions", "$failedQuestions"] },
-							},
-						},
-					},
-				]),
-			]);
+      const report = {
+        weekStart: startOfWeek,
+        weekEnd: endOfWeek,
+        totalInspections: weeklyInspections.length,
+        dailyBreakdown,
+        inspections: weeklyInspections,
+      }
 
-			const performance =
-				monthlyPerformance.length > 0 ? monthlyPerformance[0] : {};
+      sendSuccess(res, report, "Weekly report retrieved successfully")
+    } catch (error) {
+      console.error("Weekly report error:", error)
+      sendError(res, "Failed to retrieve weekly report", 500, error.message)
+    }
+  }),
+)
 
-			res.json({
-				success: true,
-				data: {
-					deliveryMan: {
-						id: deliveryMan._id,
-						name: deliveryMan.name,
-						phone: deliveryMan.phone,
-						totalInspections: deliveryMan.totalInspections,
-						totalSales: deliveryMan.totalSales,
-					},
-					monthlyStats: {
-						inspections: monthlyInspections,
-						sales: performance.totalSales || 0,
-						averageOrderValue: Math.round(performance.averageOrderValue || 0),
-						safetyScore: performance.totalQuestions
-							? Math.round(
-									(performance.totalPassedQuestions /
-										performance.totalQuestions) *
-										100
-							  )
-							: 0,
-					},
-				},
-			});
-		} catch (error) {
-			next(error);
-		}
-	}
-);
-
-module.exports = router;
+module.exports = router

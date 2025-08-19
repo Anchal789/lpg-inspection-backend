@@ -7,7 +7,6 @@ const distributorRequestSchema = new mongoose.Schema(
       required: true,
       unique: true,
       trim: true,
-      uppercase: true,
     },
     agencyName: {
       type: String,
@@ -33,12 +32,10 @@ const distributorRequestSchema = new mongoose.Schema(
         name: {
           type: String,
           required: true,
-          trim: true,
         },
         phone: {
           type: String,
           required: true,
-          trim: true,
         },
         password: {
           type: String,
@@ -51,6 +48,10 @@ const distributorRequestSchema = new mongoose.Schema(
       enum: ["pending", "approved", "rejected"],
       default: "pending",
     },
+    requestedAt: {
+      type: Date,
+      default: Date.now,
+    },
     requestDate: {
       type: Date,
       default: Date.now,
@@ -59,7 +60,7 @@ const distributorRequestSchema = new mongoose.Schema(
       type: Date,
     },
     reviewedBy: {
-      type: String,
+      type: String, // Super admin ID
     },
     rejectionReason: {
       type: String,

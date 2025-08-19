@@ -18,9 +18,21 @@ const distributorSchema = new mongoose.Schema(
       required: true,
       trim: true,
     },
-    password: {
+    adminPhone: {
       type: String,
       required: true,
+      trim: true,
+    },
+    phone: {
+      type: String,
+      trim: true,
+    },
+    adminPassword: {
+      type: String,
+      required: true,
+    },
+    password: {
+      type: String,
     },
     isActive: {
       type: Boolean,
@@ -29,6 +41,14 @@ const distributorSchema = new mongoose.Schema(
     approvedAt: {
       type: Date,
       default: Date.now,
+    },
+    deliveryMenCount: {
+      type: Number,
+      default: 0,
+    },
+    inspectionsCount: {
+      type: Number,
+      default: 0,
     },
   },
   {
