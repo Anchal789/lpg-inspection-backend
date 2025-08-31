@@ -1,279 +1,246 @@
-const express = require("express")
-const router = express.Router()
-const bcrypt = require("bcryptjs")
-const jwt = require("jsonwebtoken")
-const { sendSuccess, sendError, asyncHandler, authenticateToken } = require("../utils/errorHandler")
-const Distributor = require("../models/Distributor")
-const DistributorRequest = require("../models/DistributorRequest")
-const Inspection = require("../models/Inspection")
+const express = require("express");
+const Distributor = require("../models/Distributor");
+const DistributorRequest = require("../models/DistributorRequest");
+const DeliveryMan = require("../models/DeliveryMan");
+const Inspection = require("../models/Inspection");
+const Product = require("../models/Product");
+const {
+	sendSuccess,
+	sendError,
+	asyncHandler,
+} = require("../utils/errorHandler");
+const { authenticateToken, requireSuperAdmin } = require("../middleware/auth");
 
-// Super Admin authentication middleware
-const authenticateSuperAdmin = (req, res, next) => {
-  const authHeader = req.headers["authorization"]
-  const token = authHeader && authHeader.split(" ")[1]
+const router = express.Router();
 
-  if (!token) {
-    return sendError(res, "Access token required", 401)
-  }
+// Apply authentication to all routes
+router.use(authenticateToken);
+router.use(requireSuperAdmin);
 
-  jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
-    if (err) {
-      return sendError(res, "Invalid or expired token", 403)
-    }
-
-    if (user.role !== "super_admin") {
-      return sendError(res, "Super admin access required", 403)
-    }
-
-    req.user = user
-    next()
-  })
-}
-
-// Get dashboard statistics for super admin
+// Get dashboard statistics
 router.get(
-  "/dashboard-stats",
-  authenticateSuperAdmin,
-  asyncHandler(async (req, res) => {
-    try {
-      // Get total distributors
-      const totalDistributors = await Distributor.countDocuments({ status: "approved" })
+	"/dashboard-stats",
+	asyncHandler(async (req, res) => {
+		const [
+			totalDistributors,
+			pendingRequests,
+			totalDeliveryMen,
+			totalInspections,
+			totalProducts,
+			recentInspections,
+		] = await Promise.all([
+			Distributor.countDocuments(),
+			DistributorRequest.countDocuments({ status: "pending" }),
+			DeliveryMan.countDocuments(),
+			Inspection.countDocuments(),
+			Product.countDocuments(),
+			Inspection.find()
+				.populate("distributorId", "agencyName")
+				.populate("deliveryManId", "name")
+				.populate("productId", "name")
+				.sort({ createdAt: -1 })
+				.limit(10),
+		]);
 
-      // Get pending requests
-      const pendingRequests = await DistributorRequest.countDocuments({ status: "pending" })
+		const stats = {
+			totalDistributors,
+			pendingRequests,
+			totalDeliveryMen,
+			totalInspections,
+			totalProducts,
+			recentInspections,
+		};
 
-      // Get total inspections across all distributors
-      const totalInspections = await Inspection.countDocuments()
-
-      // Get monthly statistics
-      const startOfMonth = new Date()
-      startOfMonth.setDate(1)
-      startOfMonth.setHours(0, 0, 0, 0)
-
-      const monthlyInspections = await Inspection.countDocuments({
-        createdAt: { $gte: startOfMonth },
-      })
-
-      const monthlyDistributors = await Distributor.countDocuments({
-        createdAt: { $gte: startOfMonth },
-        status: "approved",
-      })
-
-      // Get recent activity
-      const recentRequests = await DistributorRequest.find()
-        .sort({ createdAt: -1 })
-        .limit(5)
-        .select("companyName contactPerson phone email status createdAt")
-
-      const stats = {
-        totalDistributors,
-        pendingRequests,
-        totalInspections,
-        monthlyInspections,
-        monthlyDistributors,
-        recentRequests,
-      }
-
-      sendSuccess(res, stats, "Super admin dashboard statistics retrieved successfully")
-    } catch (error) {
-      console.error("Super admin dashboard error:", error)
-      sendError(res, "Failed to retrieve dashboard statistics", 500, error.message)
-    }
-  }),
-)
+		return sendSuccess(res, stats, "Dashboard statistics fetched successfully");
+	})
+);
 
 // Get all distributor requests
 router.get(
-  "/distributor-requests",
-  authenticateSuperAdmin,
-  asyncHandler(async (req, res) => {
-    try {
-      const { status = "pending", page = 1, limit = 10 } = req.query
+	"/distributor-requests",
+	asyncHandler(async (req, res) => {
+		console.log("📋 Fetching distributor requests");
 
-      const requests = await DistributorRequest.find({ status })
-        .sort({ createdAt: -1 })
-        .limit(limit * 1)
-        .skip((page - 1) * limit)
+		const requests = await DistributorRequest.find().sort({ createdAt: -1 });
 
-      const total = await DistributorRequest.countDocuments({ status })
-
-      sendSuccess(
-        res,
-        {
-          requests,
-          pagination: {
-            current: Number.parseInt(page),
-            total: Math.ceil(total / limit),
-            count: requests.length,
-            totalRecords: total,
-          },
-        },
-        "Distributor requests retrieved successfully",
-      )
-    } catch (error) {
-      console.error("Get distributor requests error:", error)
-      sendError(res, "Failed to retrieve distributor requests", 500, error.message)
-    }
-  }),
-)
+		console.log(`✅ Found ${requests.length} distributor requests`);
+		return sendSuccess(
+			res,
+			{ requests },
+			"Distributor requests fetched successfully"
+		);
+	})
+);
 
 // Approve distributor request
 router.post(
-  "/approve-distributor/:requestId",
-  authenticateSuperAdmin,
-  asyncHandler(async (req, res) => {
-    try {
-      const { requestId } = req.params
+	"/approve-distributor/:id",
+	asyncHandler(async (req, res) => {
+		const { id } = req.params;
 
-      // Find the request
-      const request = await DistributorRequest.findById(requestId)
-      if (!request) {
-        return sendError(res, "Distributor request not found", 404)
-      }
+		const request = await DistributorRequest.findById(id);
+		if (!request) {
+			return sendError(res, "Distributor request not found", 404);
+		}
 
-      if (request.status !== "pending") {
-        return sendError(res, "Request has already been processed", 400)
-      }
+		if (request.status !== "pending") {
+			return sendError(res, "Request has already been processed", 400);
+		}
 
-      // Generate SAP code (6-digit unique number)
-      let sapCode
-      let isUnique = false
-      while (!isUnique) {
-        sapCode = Math.floor(100000 + Math.random() * 900000).toString()
-        const existingDistributor = await Distributor.findOne({ sapCode })
-        if (!existingDistributor) {
-          isUnique = true
-        }
-      }
+		// Create distributor
+		const distributor = new Distributor({
+			sapCode: request.sapCode,
+			agencyName: request.agencyName,
+			adminName: request.adminName,
+			adminPhone: request.adminPhone,
+			adminPassword: request.adminPassword,
+			phone: request.adminPhone, // Use admin phone as main phone
+			password: request.adminPassword, // Use admin password as main password
+			deliveryMen: request.deliveryMen,
+		});
 
-      // Create distributor account
-      const hashedPassword = await bcrypt.hash(request.password, 10)
+		await distributor.save();
 
-      const distributor = new Distributor({
-        sapCode,
-        companyName: request.companyName,
-        contactPerson: request.contactPerson,
-        phone: request.phone,
-        email: request.email,
-        address: request.address,
-        password: hashedPassword,
-        status: "approved",
-        approvedBy: req.user.id,
-        approvedAt: new Date(),
-      })
+		// Create delivery men if provided
+		if (request.deliveryMen && request.deliveryMen.length > 0) {
+			const deliveryMenData = request.deliveryMen.map((dm) => ({
+				name: dm.name,
+				phone: dm.phone,
+				password: dm.password,
+				distributorId: distributor._id,
+			}));
 
-      await distributor.save()
+			await DeliveryMan.insertMany(deliveryMenData);
 
-      // Update request status
-      request.status = "approved"
-      request.sapCode = sapCode
-      request.processedBy = req.user.id
-      request.processedAt = new Date()
-      await request.save()
+			console.log("Inserted delivery men:", deliveryMenData);
+		}
 
-      sendSuccess(
-        res,
-        {
-          distributor: {
-            id: distributor._id,
-            sapCode: distributor.sapCode,
-            companyName: distributor.companyName,
-            contactPerson: distributor.contactPerson,
-            phone: distributor.phone,
-            email: distributor.email,
-          },
-        },
-        "Distributor approved successfully",
-      )
-    } catch (error) {
-      console.error("Approve distributor error:", error)
-      sendError(res, "Failed to approve distributor", 500, error.message)
-    }
-  }),
-)
+		// Update request status
+		request.status = "approved";
+		request.approvedAt = new Date();
+		await request.save();
+
+		return sendSuccess(
+			res,
+			{
+				distributorId: distributor._id,
+				sapCode: distributor.sapCode,
+				agencyName: distributor.agencyName,
+				deliveryMen: distributor.deliveryMen,
+			},
+			"Distributor request approved successfully"
+		);
+	})
+);
 
 // Reject distributor request
 router.post(
-  "/reject-distributor/:requestId",
-  authenticateSuperAdmin,
-  asyncHandler(async (req, res) => {
-    try {
-      const { requestId } = req.params
-      const { reason } = req.body
+	"/reject-distributor/:id",
+	asyncHandler(async (req, res) => {
+		const { id } = req.params;
+		const { reason } = req.body;
+		console.log(" Rejecting distributor request:", id, "Reason:", reason);
 
-      if (!reason) {
-        return sendError(res, "Rejection reason is required", 400)
-      }
+		const request = await DistributorRequest.findById(id);
+		if (!request) {
+			return sendError(res, "Distributor request not found", 404);
+		}
 
-      // Find the request
-      const request = await DistributorRequest.findById(requestId)
-      if (!request) {
-        return sendError(res, "Distributor request not found", 404)
-      }
+		if (request.status !== "pending") {
+			return sendError(res, "Request has already been processed", 400);
+		}
 
-      if (request.status !== "pending") {
-        return sendError(res, "Request has already been processed", 400)
-      }
+		// Update request status
+		request.status = "rejected";
+		request.rejectedAt = new Date();
+		request.rejectionReason = reason || "No reason provided";
+		await request.save();
 
-      // Update request status
-      request.status = "rejected"
-      request.rejectionReason = reason
-      request.processedBy = req.user.id
-      request.processedAt = new Date()
-      await request.save()
+		// Delete distributor's data
+		await Distributor.deleteOne({ _id: request.distributorId });
 
-      sendSuccess(res, { requestId }, "Distributor request rejected successfully")
-    } catch (error) {
-      console.error("Reject distributor error:", error)
-      sendError(res, "Failed to reject distributor request", 500, error.message)
-    }
-  }),
-)
+		console.log(" Distributor request rejected and data deleted");
+		return sendSuccess(res, null, "Distributor request rejected successfully");
+	})
+);
 
-// Get all approved distributors
+// Get all distributors
 router.get(
-  "/distributors",
-  authenticateSuperAdmin,
-  asyncHandler(async (req, res) => {
-    try {
-      const { page = 1, limit = 10, search = "" } = req.query
+	"/distributors",
+	asyncHandler(async (req, res) => {
+		const distributors = await Distributor.find()
+			.select("-adminPassword -password")
+			.sort({ createdAt: -1 });
+		return sendSuccess(
+			res,
+			{ distributors },
+			"Distributors fetched successfully"
+		);
+	})
+);
 
-      const query = { status: "approved" }
-      if (search) {
-        query.$or = [
-          { companyName: { $regex: search, $options: "i" } },
-          { contactPerson: { $regex: search, $options: "i" } },
-          { sapCode: { $regex: search, $options: "i" } },
-          { phone: { $regex: search, $options: "i" } },
-        ]
-      }
+// Get all delivery men
+router.get(
+	"/delivery-men",
+	asyncHandler(async (req, res) => {
+		const deliveryMen = await DeliveryMan.find()
+			.populate("distributorId", "agencyName sapCode")
+			.select("-password")
+			.sort({ createdAt: -1 });
 
-      const distributors = await Distributor.find(query)
-        .select("-password")
-        .sort({ createdAt: -1 })
-        .limit(limit * 1)
-        .skip((page - 1) * limit)
+		return sendSuccess(
+			res,
+			{ deliveryMen },
+			"Delivery men fetched successfully"
+		);
+	})
+);
 
-      const total = await Distributor.countDocuments(query)
+// Get all inspections
+router.get(
+	"/inspections",
+	asyncHandler(async (req, res) => {
+		const inspections = await Inspection.find()
+			.populate("distributorId", "agencyName sapCode")
+			.populate("deliveryManId", "name phone")
+			.populate("productId", "name type")
+			.sort({ createdAt: -1 });
 
-      sendSuccess(
-        res,
-        {
-          distributors,
-          pagination: {
-            current: Number.parseInt(page),
-            total: Math.ceil(total / limit),
-            count: distributors.length,
-            totalRecords: total,
-          },
-        },
-        "Distributors retrieved successfully",
-      )
-    } catch (error) {
-      console.error("Get distributors error:", error)
-      sendError(res, "Failed to retrieve distributors", 500, error.message)
-    }
-  }),
-)
+		return sendSuccess(
+			res,
+			{ inspections },
+			"Inspections fetched successfully"
+		);
+	})
+);
 
-module.exports = router
+// Delete distributor
+router.delete(
+	"/distributors/:id",
+	asyncHandler(async (req, res) => {
+		const { id } = req.params;
+		console.log("🗑️ Deleting distributor:", id);
+
+		const distributor = await Distributor.findById(id);
+		if (!distributor) {
+			return sendError(res, "Distributor not found", 404);
+		}
+
+		// Delete associated delivery men
+		await DeliveryMan.deleteMany({ distributorId: id });
+
+		// Delete associated inspections
+		await Inspection.deleteMany({ distributorId: id });
+
+		// Delete associated products
+		await Product.deleteMany({ distributorId: id });
+
+		// Delete distributor
+		await Distributor.findByIdAndDelete(id);
+
+		console.log("✅ Distributor and associated data deleted");
+		return sendSuccess(res, null, "Distributor deleted successfully");
+	})
+);
+
+module.exports = router;

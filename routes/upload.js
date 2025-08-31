@@ -1,162 +1,153 @@
-const express = require("express")
-const multer = require("multer")
-const path = require("path")
-const fs = require("fs")
-const { sendSuccess, sendError, asyncHandler } = require("../utils/errorHandler")
-const auth = require("../middleware/auth")
+const express = require("express");
+const { sendSuccess, sendError, asyncHandler } = require("../utils/errorHandler");
+const { authenticateToken } = require("../middleware/auth");
+const { uploadToS3, deleteFromS3 } = require("../config/s3Config");
 
-const router = express.Router()
+const router = express.Router();
 
-// Create uploads directory if it doesn't exist
-const uploadsDir = path.join(__dirname, "../uploads")
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true })
-}
+// Apply authentication to all routes
+router.use(authenticateToken);
 
-// Configure multer for file uploads
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const uploadPath = path.join(uploadsDir, "inspections")
-    if (!fs.existsSync(uploadPath)) {
-      fs.mkdirSync(uploadPath, { recursive: true })
-    }
-    cb(null, uploadPath)
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9)
-    cb(null, file.fieldname + "-" + uniqueSuffix + path.extname(file.originalname))
-  },
-})
-
-const fileFilter = (req, file, cb) => {
-  // Allow images only
-  if (file.mimetype.startsWith("image/")) {
-    cb(null, true)
-  } else {
-    cb(new Error("Only image files are allowed"), false)
-  }
-}
-
-const upload = multer({
-  storage: storage,
-  limits: {
-    fileSize: 10 * 1024 * 1024, // 10MB limit
-    files: 10, // Maximum 10 files
-  },
-  fileFilter: fileFilter,
-})
-
-// Upload inspection images
+// Upload single file to S3
 router.post(
-  "/inspection-images",
-  auth,
-  upload.array("images", 10),
+  "/single",
+  uploadToS3.single("file"),
   asyncHandler(async (req, res) => {
-    if (!req.files || req.files.length === 0) {
-      return sendError(res, "No files uploaded", 400)
+    console.log("📁 Single file upload request to S3");
+
+    if (!req.file) {
+      return sendError(res, "No file uploaded", 400);
     }
 
-    const uploadedFiles = req.files.map((file) => ({
-      filename: file.filename,
+    console.log("✅ File uploaded to S3:", req.file.key);
+    return sendSuccess(
+      res,
+      {
+        filename: req.file.key.split('/').pop(),
+        originalName: req.file.originalname,
+        size: req.file.size,
+        mimetype: req.file.mimetype,
+        url: req.file.location, // S3 URL
+        key: req.file.key, // S3 key for deletion
+      },
+      "File uploaded successfully to S3"
+    );
+  })
+);
+
+// Upload multiple files to S3
+router.post(
+  "/multiple",
+  uploadToS3.array("files", 10), // Max 10 files
+  asyncHandler(async (req, res) => {
+    console.log("📁 Multiple files upload request to S3");
+
+    if (!req.files || req.files.length === 0) {
+      return sendError(res, "No files uploaded", 400);
+    }
+
+    const files = req.files.map((file) => ({
+      filename: file.key.split('/').pop(),
       originalName: file.originalname,
-      path: `/uploads/inspections/${file.filename}`,
       size: file.size,
       mimetype: file.mimetype,
-    }))
+      url: file.location, // S3 URL
+      key: file.key, // S3 key for deletion
+    }));
 
-    return sendSuccess(
-      res,
-      {
-        files: uploadedFiles,
-      },
-      "Files uploaded successfully",
-    )
-  }),
-)
+    console.log(`✅ ${files.length} files uploaded to S3`);
+    return sendSuccess(res, { files }, "Files uploaded successfully to S3");
+  })
+);
 
-// Upload single image
+// Upload inspection images to S3 with inspection ID
 router.post(
-  "/single-image",
-  auth,
-  upload.single("image"),
+  "/inspection-images",
+  uploadToS3.array("images", 5), // Max 5 images for inspection
   asyncHandler(async (req, res) => {
+    console.log("📸 Inspection images upload request to S3");
+    console.log("Inspection ID from body:", req.body.inspectionId);
+
+    if (!req.files || req.files.length === 0) {
+      return sendError(res, "No images uploaded", 400);
+    }
+
+    const images = req.files.map((file) => ({
+      imageId: `img_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      filename: file.key.split('/').pop(),
+      originalName: file.originalname,
+      size: file.size,
+      url: file.location, // S3 URL - this is what you'll save in inspection
+      key: file.key, // S3 key for deletion
+      uploadedAt: new Date(),
+    }));
+
+    console.log(`✅ ${images.length} inspection images uploaded to S3`);
+    return sendSuccess(
+      res, 
+      { images }, 
+      "Inspection images uploaded successfully to S3"
+    );
+  })
+);
+
+// Upload signature to S3
+router.post(
+  "/signature",
+  uploadToS3.single("signature"),
+  asyncHandler(async (req, res) => {
+    console.log("✍️ Signature upload request to S3");
+
     if (!req.file) {
-      return sendError(res, "No file uploaded", 400)
+      return sendError(res, "No signature uploaded", 400);
     }
 
-    const uploadedFile = {
-      filename: req.file.filename,
-      originalName: req.file.originalname,
-      path: `/uploads/inspections/${req.file.filename}`,
-      size: req.file.size,
-      mimetype: req.file.mimetype,
-    }
-
+    console.log("✅ Signature uploaded to S3:", req.file.key);
     return sendSuccess(
       res,
       {
-        file: uploadedFile,
+        filename: req.file.key.split('/').pop(),
+        url: req.file.location, // S3 URL
+        key: req.file.key,
       },
-      "File uploaded successfully",
-    )
-  }),
-)
+      "Signature uploaded successfully to S3"
+    );
+  })
+);
 
-// Get uploaded file
-router.get("/file/:filename", (req, res) => {
-  const { filename } = req.params
-  const filePath = path.join(uploadsDir, "inspections", filename)
-
-  if (!fs.existsSync(filePath)) {
-    return res.status(404).json({
-      success: false,
-      message: "File not found",
-    })
-  }
-
-  res.sendFile(filePath)
-})
-
-// Delete uploaded file
+// Delete file from S3
 router.delete(
-  "/file/:filename",
-  auth,
+  "/:key(*)", // Allow slashes in the key parameter
   asyncHandler(async (req, res) => {
-    const { filename } = req.params
-    const filePath = path.join(uploadsDir, "inspections", filename)
+    const { key } = req.params;
+    console.log("🗑️ Deleting file from S3:", key);
 
-    if (!fs.existsSync(filePath)) {
-      return sendError(res, "File not found", 404)
+    try {
+      await deleteFromS3(key);
+      console.log("✅ File deleted from S3:", key);
+      return sendSuccess(res, null, "File deleted successfully from S3");
+    } catch (error) {
+      console.error("❌ Error deleting file from S3:", error);
+      return sendError(res, "Failed to delete file from S3", 500);
     }
-
-    fs.unlinkSync(filePath)
-
-    return sendSuccess(
-      res,
-      {
-        message: "File deleted successfully",
-      },
-      "File deleted",
-    )
-  }),
-)
+  })
+);
 
 // Error handling middleware for multer
 router.use((error, req, res, next) => {
-  if (error instanceof multer.MulterError) {
-    if (error.code === "LIMIT_FILE_SIZE") {
-      return sendError(res, "File too large. Maximum size is 10MB", 400)
-    }
-    if (error.code === "LIMIT_FILE_COUNT") {
-      return sendError(res, "Too many files. Maximum is 10 files", 400)
-    }
+  console.error("Upload error:", error);
+  
+  if (error.code === "LIMIT_FILE_SIZE") {
+    return sendError(res, "File too large. Maximum size is 10MB", 400);
+  }
+  if (error.code === "LIMIT_FILE_COUNT") {
+    return sendError(res, "Too many files. Maximum is 10 files", 400);
+  }
+  if (error.message.includes("Only images")) {
+    return sendError(res, error.message, 400);
   }
 
-  if (error.message === "Only image files are allowed") {
-    return sendError(res, "Only image files are allowed", 400)
-  }
+  return sendError(res, "Upload failed", 500);
+});
 
-  return sendError(res, error.message || "Upload failed", 500)
-})
-
-module.exports = router
+module.exports = router;

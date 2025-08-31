@@ -1,26 +1,22 @@
-// Input validation utilities without external dependencies
+// Validate SAP Code (6 digits)
+const validateSapCode = (sapCode) => {
+  if (!sapCode.trim()) return false
+  if (sapCode.length < 5) return false
+  if (sapCode.length > 10) return false
+  return true
+}
 
-// Validate phone number (Indian format)
+// Validate phone number (10 digits)
 const validatePhone = (phone) => {
   if (!phone) return false
-  const phoneStr = phone.toString().replace(/\s+/g, "")
-  const phoneRegex = /^[6-9]\d{9}$/
-  return phoneRegex.test(phoneStr)
+  const phoneRegex = /^\d{10}$/
+  return phoneRegex.test(phone)
 }
 
-// Validate SAP code format (allow super admin code)
-const validateSapCode = (sapCode) => {
-  if (!sapCode) return false
-  const sapStr = sapCode.toString().toUpperCase()
-  // Allow super admin SAP code "000000" or regular format
-  if (sapStr === "000000") return true
-  const sapRegex = /^[A-Z0-9]{6}$/
-  return sapRegex.test(sapStr)
-}
-
-// Validate password strength
+// Validate password (minimum 4 characters)
 const validatePassword = (password) => {
-  return password && password.length >= 4
+  if (!password) return false
+  return password.length >= 4
 }
 
 // Validate email
@@ -30,126 +26,29 @@ const validateEmail = (email) => {
   return emailRegex.test(email)
 }
 
+// Validate name (3-40 characters, letters and spaces only)
+const validateName = (name) => {
+  if (!name) return false
+  const nameRegex = /^[a-zA-Z\s]{3,40}$/
+  return nameRegex.test(name.trim())
+}
+
 // Validate required fields
-const validateRequired = (fields, data) => {
+const validateRequired = (fields) => {
   const missing = []
-  fields.forEach((field) => {
-    if (!data[field] || data[field].toString().trim() === "") {
-      missing.push(field)
+  for (const [key, value] of Object.entries(fields)) {
+    if (!value || (typeof value === "string" && value.trim() === "")) {
+      missing.push(key)
     }
-  })
+  }
   return missing
 }
 
-// Validate date format
-const validateDate = (dateString) => {
-  const date = new Date(dateString)
-  return date instanceof Date && !isNaN(date)
-}
-
-// Validate MongoDB ObjectId
-const validateObjectId = (id) => {
-  return /^[0-9a-fA-F]{24}$/.test(id)
-}
-
-// Sanitize input data
-const sanitizeInput = (data) => {
-  const sanitized = {}
-  for (const key in data) {
-    if (typeof data[key] === "string") {
-      sanitized[key] = data[key].trim().replace(/[<>]/g, "")
-    } else {
-      sanitized[key] = data[key]
-    }
-  }
-  return sanitized
-}
-
-// Validate inspection data
-const validateInspectionData = (data) => {
-  const errors = []
-
-  const required = ["deliveryManId", "customerName", "customerPhone", "customerAddress"]
-  const missing = validateRequired(required, data)
-  if (missing.length > 0) {
-    errors.push(`Missing required fields: ${missing.join(", ")}`)
-  }
-
-  if (data.customerPhone && !validatePhone(data.customerPhone)) {
-    errors.push("Invalid phone number format")
-  }
-
-  if (data.deliveryManId && !validateObjectId(data.deliveryManId)) {
-    errors.push("Invalid delivery man ID")
-  }
-
-  return errors
-}
-
-// Validate product data
-const validateProductData = (data) => {
-  const errors = []
-
-  const required = ["name", "type", "serialNumber", "distributorId"]
-  const missing = validateRequired(required, data)
-  if (missing.length > 0) {
-    errors.push(`Missing required fields: ${missing.join(", ")}`)
-  }
-
-  if (data.distributorId && !validateObjectId(data.distributorId)) {
-    errors.push("Invalid distributor ID")
-  }
-
-  if (data.manufacturingDate && !validateDate(data.manufacturingDate)) {
-    errors.push("Invalid manufacturing date")
-  }
-
-  if (data.expiryDate && !validateDate(data.expiryDate)) {
-    errors.push("Invalid expiry date")
-  }
-
-  return errors
-}
-
-// Validate delivery man data
-const validateDeliveryManData = (data) => {
-  const errors = []
-
-  const required = ["name", "phone", "password", "distributorId", "sapCode"]
-  const missing = validateRequired(required, data)
-  if (missing.length > 0) {
-    errors.push(`Missing required fields: ${missing.join(", ")}`)
-  }
-
-  if (data.phone && !validatePhone(data.phone)) {
-    errors.push("Invalid phone number format")
-  }
-
-  if (data.password && !validatePassword(data.password)) {
-    errors.push("Password must be at least 4 characters long")
-  }
-
-  if (data.distributorId && !validateObjectId(data.distributorId)) {
-    errors.push("Invalid distributor ID")
-  }
-
-  if (data.sapCode && !validateSapCode(data.sapCode)) {
-    errors.push("Invalid SAP code format")
-  }
-
-  return errors
-}
-
 module.exports = {
-  validatePhone,
   validateSapCode,
+  validatePhone,
   validatePassword,
   validateEmail,
+  validateName,
   validateRequired,
-  validateDate,
-  validateObjectId,
-  sanitizeInput,
-  validateInspectionData,
-  validateProductData,
-  validateDeliveryManData,
 }

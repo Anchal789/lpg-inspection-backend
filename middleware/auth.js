@@ -1,26 +1,24 @@
 const jwt = require("jsonwebtoken")
 const { sendError } = require("../utils/errorHandler")
 
-const auth = (req, res, next) => {
-  try {
-    const authHeader = req.headers["authorization"]
-    const token = authHeader && authHeader.split(" ")[1]
+const JWT_SECRET = process.env.JWT_SECRET || "your-secret-key"
 
-    if (!token) {
-      return sendError(res, "Access token required", 401)
-    }
+const authenticateToken = (req, res, next) => {
+  const authHeader = req.headers["authorization"]
+  const token = authHeader && authHeader.split(" ")[1]
 
-    jwt.verify(token, process.env.JWT_SECRET || "your-secret-key", (err, decoded) => {
-      if (err) {
-        return sendError(res, "Invalid or expired token", 403)
-      }
-
-      req.user = decoded
-      next()
-    })
-  } catch (error) {
-    return sendError(res, "Authentication failed", 401)
+  if (!token) {
+    return sendError(res, "Access token required", 401)
   }
+
+  jwt.verify(token, JWT_SECRET, (err, user) => {
+    if (err) {
+      console.error("❌ Token verification failed:", err.message)
+      return sendError(res, "Invalid or expired token", 403)
+    }
+    req.user = user
+    next()
+  })
 }
 
 // Role-based middleware
@@ -30,7 +28,8 @@ const requireRole = (roles) => {
       return sendError(res, "Authentication required", 401)
     }
 
-    if (!roles.includes(req.user.role)) {
+    const userRole = req.user.type || req.user.role
+    if (!roles.includes(userRole)) {
       return sendError(res, "Insufficient permissions", 403)
     }
 
@@ -38,5 +37,25 @@ const requireRole = (roles) => {
   }
 }
 
-module.exports = auth
-module.exports.requireRole = requireRole
+// Super admin only middleware
+const requireSuperAdmin = (req, res, next) => {
+  if (!req.user || req.user.type !== "super_admin") {
+    return sendError(res, "Super admin access required", 403)
+  }
+  next()
+}
+
+// Admin or super admin middleware
+const requireAdmin = (req, res, next) => {
+  if (!req.user || !["super_admin", "distributor_admin"].includes(req.user.type)) {
+    return sendError(res, "Admin access required", 403)
+  }
+  next()
+}
+
+module.exports = {
+  authenticateToken,
+  requireRole,
+  requireSuperAdmin,
+  requireAdmin,
+}

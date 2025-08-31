@@ -53,6 +53,7 @@ const deliveryManRoutes = require("./routes/deliveryMen")
 const dashboardRoutes = require("./routes/dashboard")
 const superAdminRoutes = require("./routes/superAdmin")
 const uploadRoutes = require("./routes/upload")
+const chartsRoutes = require("./routes/charts")
 
 // Mount Routes
 app.use("/api/auth", authRoutes)
@@ -62,6 +63,7 @@ app.use("/api/delivery-men", deliveryManRoutes)
 app.use("/api/dashboard", dashboardRoutes)
 app.use("/api/super-admin", superAdminRoutes)
 app.use("/api/upload", uploadRoutes)
+app.use('/api/charts', chartsRoutes)
 
 // Health check endpoint
 app.get("/api/health", (req, res) => {

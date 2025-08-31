@@ -1,325 +1,365 @@
-const express = require("express")
-const mongoose = require("mongoose")
-const Inspection = require("../models/Inspection")
-const DeliveryMan = require("../models/DeliveryMan")
-const Product = require("../models/Product")
-const { sendSuccess, sendError, asyncHandler } = require("../utils/errorHandler")
-const auth = require("../middleware/auth")
+const express = require("express");
+const mongoose = require("mongoose");
+const Inspection = require("../models/Inspection");
+const DeliveryMan = require("../models/DeliveryMan");
+const Product = require("../models/Product");
+const {
+	sendSuccess,
+	sendError,
+	asyncHandler,
+} = require("../utils/errorHandler");
+const { authenticateToken } = require("../middleware/auth");
 
-const router = express.Router()
+const router = express.Router();
 
-// Create new inspection
+// Apply authentication to all routes
+router.use(authenticateToken);
+
+// Create new inspection with S3 image URLs
 router.post(
-  "/",
-  auth,
-  asyncHandler(async (req, res) => {
-    const {
-      deliveryManId,
-      distributorId,
-      customerName,
-      customerPhone,
-      customerAddress,
-      products,
-      inspectionQuestions,
-      totalAmount,
-      notes,
-      images,
-    } = req.body
+	"/",
+	asyncHandler(async (req, res) => {
+		const { type, distributorId } = req.user;
+		console.log("req.body", req.body);
 
-    // Validate required fields
-    if (!deliveryManId || !distributorId || !customerName || !products || !products.length) {
-      return sendError(res, "Missing required fields")
-    }
+		const {
+			id,
+			consumerName,
+			consumerNumber,
+			mobileNumber,
+			address,
+			deliveryManId,
+			deliveryManName,
+			date,
+			answers,
+			images, // These will now be S3 URLs
+			products,
+			totalAmount,
+			location,
+			hotplateExchange,
+			otherDiscount,
+			surakshaHoseDueDate,
+			hotplateQuantity,
+		} = req.body;
 
-    // Verify delivery man exists
-    const deliveryMan = await DeliveryMan.findById(deliveryManId)
-    if (!deliveryMan) {
-      return sendError(res, "Delivery man not found", 404)
-    }
+		// Validate required fields
+		if (!consumerName || !mobileNumber || !address || !totalAmount) {
+			return sendError(res, "Missing required fields", 400);
+		}
 
-    // Create inspection
-    const inspection = new Inspection({
-      deliveryManId,
-      distributorId,
-      customerName,
-      customerPhone,
-      customerAddress,
-      products,
-      inspectionQuestions: inspectionQuestions || {},
-      totalAmount: totalAmount || 0,
-      notes,
-      images: images || [],
-      inspectionDate: new Date(),
-      status: "completed",
-    })
+		// Verify delivery man exists
+		let validDeliveryManId = req.user.deliveryManId || req.user.id;
+		if (deliveryManId) {
+			const deliveryMan = await DeliveryMan.findById(deliveryManId);
+			if (deliveryMan) {
+				validDeliveryManId = deliveryManId;
+			}
+		}
 
-    await inspection.save()
+		// Validate products if provided
+		if (products && products.length > 0) {
+			const productIds = products
+				.map((product) => product._id || product.id)
+				.filter(
+					(id) =>
+						id &&
+						!id.toString().startsWith("hotplate_") &&
+						!id.toString().startsWith("platform_") &&
+						id !== "dummy_product_id"
+				);
 
-    // Populate the created inspection
-    const populatedInspection = await Inspection.findById(inspection._id)
-      .populate("deliveryManId", "name phone sapCode")
-      .populate("products.productId", "name type serialNumber")
+			if (productIds.length > 0) {
+				const foundProducts = await Product.find({ _id: { $in: productIds } });
+				console.log(
+					`Found ${foundProducts.length} products out of ${productIds.length} requested`
+				);
 
-    return sendSuccess(
-      res,
-      {
-        inspection: populatedInspection,
-      },
-      "Inspection created successfully",
-    )
-  }),
-)
+				if (foundProducts.length !== productIds.length) {
+					const foundIds = foundProducts.map((p) => p._id.toString());
+					const missingIds = productIds.filter(
+						(id) => !foundIds.includes(id.toString())
+					);
+					console.log("Missing product IDs:", missingIds);
+				}
+			}
+		}
 
-// Get inspections
+		// Transform answers to safetyQuestions format
+		const safetyQuestions = answers
+			? Object.keys(answers).map((key) => ({
+					questionId: parseInt(key),
+					question: `Question ${parseInt(key) + 1}`,
+					answer: answers[key],
+			  }))
+			: [];
+
+		// Transform S3 images to proper format
+		const formattedImages = images
+			? images.map((image, index) => {
+					// Handle both string URLs and object formats
+					if (typeof image === 'string') {
+						return {
+							imageId: `img_${Date.now()}_${index}`,
+							imageUrl: image, // S3 URL
+							uploadedAt: new Date(),
+							fileSize: 0,
+						};
+					} else {
+						return {
+							imageId: image.imageId || `img_${Date.now()}_${index}`,
+							imageUrl: image.url || image.imageUrl, // S3 URL
+							uploadedAt: new Date(image.uploadedAt) || new Date(),
+							fileSize: image.size || 0,
+							s3Key: image.key, // Store S3 key for deletion if needed
+						};
+					}
+			  })
+			: [];
+
+		// Transform products to match schema
+		const formattedProducts = products
+			? products.map((product) => {
+					const productId = product._id || product.id;
+					const isValidObjectId =
+						mongoose.Types.ObjectId.isValid(productId) &&
+						productId.toString().length === 24;
+
+					return {
+						productId: isValidObjectId ? productId : null,
+						name: product.name,
+						price: product.price,
+						quantity: product.quantity || 1,
+						subtotal: (product.price || 0) * (product.quantity || 1),
+					};
+			  })
+			: [];
+
+		// Calculate passed/failed questions
+		const passedQuestions = Object.values(answers || {}).filter(
+			(answer) => answer === "yes"
+		).length;
+		const failedQuestions = Object.values(answers || {}).filter(
+			(answer) => answer === "no"
+		).length;
+
+		// Generate inspection ID if not provided
+		const inspectionId = id || `INS-${Date.now()}`;
+
+		// Create inspection with S3 URLs
+		const inspection = new Inspection({
+			inspectionId: inspectionId,
+			distributorId: distributorId,
+			deliveryManId: validDeliveryManId,
+			consumer: {
+				name: consumerName,
+				consumerNumber: consumerNumber,
+				mobileNumber: mobileNumber,
+				address: address,
+			},
+			safetyQuestions: safetyQuestions,
+			images: formattedImages, // Now contains S3 URLs
+			products: formattedProducts,
+			totalAmount: totalAmount,
+			location: {
+				latitude: location?.latitude || 0,
+				longitude: location?.longitude || 0,
+				address: address,
+				accuracy: location?.accuracy || 0,
+			},
+			status: "completed",
+			passedQuestions: passedQuestions,
+			failedQuestions: failedQuestions,
+			inspectionDate: date ? new Date(date) : new Date(),
+			hotplateExchange: hotplateExchange,
+			otherDiscount: otherDiscount,
+			surakshaHoseDueDate: surakshaHoseDueDate,
+			hotplateQuantity: hotplateQuantity,
+		});
+
+		await inspection.save();
+
+		// Populate the created inspection
+		await inspection.populate([
+			{ path: "distributorId", select: "agencyName sapCode" },
+			{ path: "deliveryManId", select: "name phone" },
+			{ path: "products.productId", select: "name type serialNumber" },
+		]);
+
+		console.log("✅ Inspection created with S3 images:", inspection._id);
+		return sendSuccess(
+			res,
+			{ inspection },
+			"Inspection created successfully with S3 images",
+			201
+		);
+	})
+);
+
+// Get inspections - Updated to work with S3 URLs
 router.get(
-  "/",
-  auth,
-  asyncHandler(async (req, res) => {
-    const { deliveryManId, distributorId, status, page = 1, limit = 20, startDate, endDate } = req.query
+	"/",
+	asyncHandler(async (req, res) => {
+		const { type, distributorId } = req.user;
+		const { page = 1, limit = 10, status, search } = req.query;
 
-    // Build filter
-    const filter = {}
+		console.log("📋 Fetching inspections for:", type, distributorId);
 
-    if (deliveryManId) filter.deliveryManId = deliveryManId
-    if (distributorId) filter.distributorId = distributorId
-    if (status) filter.status = status
+		const query = {};
 
-    if (startDate || endDate) {
-      filter.inspectionDate = {}
-      if (startDate) filter.inspectionDate.$gte = new Date(startDate)
-      if (endDate) filter.inspectionDate.$lte = new Date(endDate)
-    }
+		// Filter based on user type
+		if (type === "distributor_admin") {
+			query.distributorId = distributorId;
+		} else if (type === "delivery_man") {
+			query.deliveryManId = req.user.deliveryManId || req.user.id;
+		}
 
-    // Role-based filtering
-    if (req.user.role === "delivery_man") {
-      filter.deliveryManId = req.user.id
-    } else if (req.user.role === "distributor_admin") {
-      filter.distributorId = req.user.distributorId
-    }
+		// Add status filter
+		if (status) {
+			query.status = status;
+		}
 
-    const skip = (Number.parseInt(page) - 1) * Number.parseInt(limit)
+		// Add search filter
+		if (search) {
+			query.$or = [
+				{ "consumer.name": { $regex: search, $options: "i" } },
+				{ "consumer.mobileNumber": { $regex: search, $options: "i" } },
+				{ "consumer.address": { $regex: search, $options: "i" } },
+				{ inspectionId: { $regex: search, $options: "i" } },
+			];
+		}
 
-    const [inspections, total] = await Promise.all([
-      Inspection.find(filter)
-        .populate("deliveryManId", "name phone sapCode")
-        .populate("products.productId", "name type serialNumber")
-        .sort({ inspectionDate: -1 })
-        .skip(skip)
-        .limit(Number.parseInt(limit)),
-      Inspection.countDocuments(filter),
-    ])
+		const skip = (Number.parseInt(page) - 1) * Number.parseInt(limit);
 
-    return sendSuccess(
-      res,
-      {
-        inspections,
-        pagination: {
-          page: Number.parseInt(page),
-          limit: Number.parseInt(limit),
-          total,
-          pages: Math.ceil(total / Number.parseInt(limit)),
-        },
-      },
-      "Inspections fetched successfully",
-    )
-  }),
-)
+		const [inspections, total] = await Promise.all([
+			Inspection.find(query)
+				.populate("distributorId", "agencyName sapCode")
+				.populate("deliveryManId", "name phone")
+				.populate("products.productId", "name type serialNumber")
+				.sort({ createdAt: -1 })
+				.skip(skip)
+				.limit(Number.parseInt(limit)),
+			Inspection.countDocuments(query),
+		]);
+
+		const totalPages = Math.ceil(total / Number.parseInt(limit));
+
+		console.log(`✅ Found ${inspections.length} inspections with S3 images (${total} total)`);
+		return sendSuccess(
+			res,
+			{
+				inspections,
+				pagination: {
+					currentPage: Number.parseInt(page),
+					totalPages,
+					totalItems: total,
+					itemsPerPage: Number.parseInt(limit),
+				},
+			},
+			"Inspections fetched successfully"
+		);
+	})
+);
 
 // Get inspection by ID
 router.get(
-  "/:id",
-  auth,
-  asyncHandler(async (req, res) => {
-    const { id } = req.params
+	"/:id",
+	asyncHandler(async (req, res) => {
+		const { id } = req.params;
+		const { type, distributorId } = req.user;
 
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return sendError(res, "Invalid inspection ID", 400)
-    }
+		console.log("🔍 Fetching inspection:", id);
 
-    const inspection = await Inspection.findById(id)
-      .populate("deliveryManId", "name phone sapCode")
-      .populate("products.productId", "name type serialNumber")
+		const query = { _id: id };
 
-    if (!inspection) {
-      return sendError(res, "Inspection not found", 404)
-    }
+		// Filter based on user type
+		if (type === "distributor_admin") {
+			query.distributorId = distributorId;
+		} else if (type === "delivery_man") {
+			query.deliveryManId = req.user.deliveryManId || req.user.id;
+		}
 
-    // Check permissions
-    if (req.user.role === "delivery_man" && inspection.deliveryManId._id.toString() !== req.user.id) {
-      return sendError(res, "Access denied", 403)
-    }
+		const inspection = await Inspection.findOne(query)
+			.populate("distributorId", "agencyName sapCode")
+			.populate("deliveryManId", "name phone")
+			.populate("products.productId", "name type serialNumber");
 
-    return sendSuccess(res, { inspection }, "Inspection fetched successfully")
-  }),
-)
+		if (!inspection) {
+			return sendError(res, "Inspection not found or access denied", 404);
+		}
 
-// Search inspections
-router.get(
-  "/search/query",
-  auth,
-  asyncHandler(async (req, res) => {
-    const { q, sapCode, customerName, customerPhone, startDate, endDate, page = 1, limit = 20 } = req.query
-
-    const filter = {}
-
-    // Role-based filtering
-    if (req.user.role === "delivery_man") {
-      filter.deliveryManId = req.user.id
-    } else if (req.user.role === "distributor_admin") {
-      filter.distributorId = req.user.distributorId
-    }
-
-    // Date range filter
-    if (startDate || endDate) {
-      filter.inspectionDate = {}
-      if (startDate) filter.inspectionDate.$gte = new Date(startDate)
-      if (endDate) filter.inspectionDate.$lte = new Date(endDate)
-    }
-
-    // Text search filters
-    if (customerName) {
-      filter.customerName = { $regex: customerName, $options: "i" }
-    }
-
-    if (customerPhone) {
-      filter.customerPhone = { $regex: customerPhone, $options: "i" }
-    }
-
-    const inspections = []
-
-    if (sapCode) {
-      // Search by SAP code (delivery man)
-      const deliveryMen = await DeliveryMan.find({
-        sapCode: { $regex: sapCode, $options: "i" },
-      }).select("_id")
-
-      if (deliveryMen.length > 0) {
-        filter.deliveryManId = { $in: deliveryMen.map((dm) => dm._id) }
-      } else {
-        // No delivery men found with this SAP code
-        return sendSuccess(
-          res,
-          {
-            inspections: [],
-            pagination: { page: 1, limit: Number.parseInt(limit), total: 0, pages: 0 },
-          },
-          "No inspections found",
-        )
-      }
-    }
-
-    if (q) {
-      // General text search
-      filter.$or = [
-        { customerName: { $regex: q, $options: "i" } },
-        { customerPhone: { $regex: q, $options: "i" } },
-        { notes: { $regex: q, $options: "i" } },
-      ]
-    }
-
-    const skip = (Number.parseInt(page) - 1) * Number.parseInt(limit)
-
-    const [searchResults, total] = await Promise.all([
-      Inspection.find(filter)
-        .populate("deliveryManId", "name phone sapCode")
-        .populate("products.productId", "name type serialNumber")
-        .sort({ inspectionDate: -1 })
-        .skip(skip)
-        .limit(Number.parseInt(limit)),
-      Inspection.countDocuments(filter),
-    ])
-
-    return sendSuccess(
-      res,
-      {
-        inspections: searchResults,
-        pagination: {
-          page: Number.parseInt(page),
-          limit: Number.parseInt(limit),
-          total,
-          pages: Math.ceil(total / Number.parseInt(limit)),
-        },
-      },
-      "Search completed successfully",
-    )
-  }),
-)
+		console.log("✅ Inspection fetched with S3 images:", inspection._id);
+		return sendSuccess(res, { inspection }, "Inspection fetched successfully");
+	})
+);
 
 // Update inspection
 router.put(
-  "/:id",
-  auth,
-  asyncHandler(async (req, res) => {
-    const { id } = req.params
-    const updates = req.body
+	"/:id",
+	asyncHandler(async (req, res) => {
+		const { id } = req.params;
+		const { type, distributorId } = req.user;
 
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return sendError(res, "Invalid inspection ID", 400)
-    }
+		console.log("📝 Updating inspection:", id);
 
-    const inspection = await Inspection.findById(id)
-    if (!inspection) {
-      return sendError(res, "Inspection not found", 404)
-    }
+		const query = { _id: id };
 
-    // Check permissions
-    if (req.user.role === "delivery_man" && inspection.deliveryManId.toString() !== req.user.id) {
-      return sendError(res, "Access denied", 403)
-    }
+		// Filter based on user type
+		if (type === "distributor_admin") {
+			query.distributorId = distributorId;
+		} else if (type === "delivery_man") {
+			query.deliveryManId = req.user.deliveryManId || req.user.id;
+		}
 
-    // Update inspection
-    Object.assign(inspection, updates)
-    inspection.updatedAt = new Date()
-    await inspection.save()
+		const inspection = await Inspection.findOneAndUpdate(query, req.body, {
+			new: true,
+			runValidators: true,
+		})
+			.populate("distributorId", "agencyName sapCode")
+			.populate("deliveryManId", "name phone")
+			.populate("products.productId", "name type serialNumber");
 
-    const updatedInspection = await Inspection.findById(id)
-      .populate("deliveryManId", "name phone sapCode")
-      .populate("products.productId", "name type serialNumber")
+		if (!inspection) {
+			return sendError(res, "Inspection not found or access denied", 404);
+		}
 
-    return sendSuccess(
-      res,
-      {
-        inspection: updatedInspection,
-      },
-      "Inspection updated successfully",
-    )
-  }),
-)
+		console.log("✅ Inspection updated:", inspection._id);
+		return sendSuccess(res, { inspection }, "Inspection updated successfully");
+	})
+);
 
 // Delete inspection
 router.delete(
-  "/:id",
-  auth,
-  asyncHandler(async (req, res) => {
-    const { id } = req.params
+	"/:id",
+	asyncHandler(async (req, res) => {
+		const { id } = req.params;
+		const { type, distributorId } = req.user;
 
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return sendError(res, "Invalid inspection ID", 400)
-    }
+		console.log("🗑️ Deleting inspection:", id);
 
-    const inspection = await Inspection.findById(id)
-    if (!inspection) {
-      return sendError(res, "Inspection not found", 404)
-    }
+		const query = { _id: id };
 
-    // Only super admin or the delivery man who created it can delete
-    if (
-      req.user.role !== "super_admin" &&
-      (req.user.role !== "delivery_man" || inspection.deliveryManId.toString() !== req.user.id)
-    ) {
-      return sendError(res, "Access denied", 403)
-    }
+		// Only super admin and distributor admin can delete
+		if (type === "delivery_man") {
+			return sendError(
+				res,
+				"Insufficient permissions to delete inspections",
+				403
+			);
+		}
 
-    await Inspection.findByIdAndDelete(id)
+		if (type === "distributor_admin") {
+			query.distributorId = distributorId;
+		}
 
-    return sendSuccess(
-      res,
-      {
-        message: "Inspection deleted successfully",
-      },
-      "Inspection deleted",
-    )
-  }),
-)
+		const inspection = await Inspection.findOneAndDelete(query);
 
-module.exports = router
+		if (!inspection) {
+			return sendError(res, "Inspection not found or access denied", 404);
+		}
+
+		console.log("✅ Inspection deleted:", id);
+		return sendSuccess(res, null, "Inspection deleted successfully");
+	})
+);
+
+module.exports = router;
