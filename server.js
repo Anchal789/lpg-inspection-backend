@@ -34,16 +34,22 @@ app.options("*", (req, res) => {
 
 // MongoDB Connection
 console.log("🔗 Connecting to MongoDB...")
-mongoose
-  .connect(process.env.MONGODB_CONNECTION_STRING, {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
-  })
-  .then(() => console.log("✅ Connected to MongoDB Atlas"))
-  .catch((error) => {
-    console.error("❌ MongoDB connection error:", error)
-    process.exit(1)
-  })
+
+const connectWithRetry = async () => {
+  try {
+    await mongoose.connect(process.env.MONGODB_CONNECTION_STRING, {
+      useNewUrlParser: true,
+      useUnifiedTopology: true,
+    })
+    console.log("✅ Connected to MongoDB Atlas")
+  } catch (error) {
+    console.error("❌ MongoDB connection error (will retry):", error.message)
+    // Wait 5s and retry without exiting; healthcheck will still return 200 with mongodb: "Disconnected"
+    setTimeout(connectWithRetry, 5000)
+  }
+}
+
+connectWithRetry()
 
 // Import Routes with error handling
 const authRoutes = require("./routes/auth")
@@ -55,8 +61,8 @@ const superAdminRoutes = require("./routes/superAdmin")
 const uploadRoutes = require("./routes/upload")
 
 // Import new routes with error handling
-let chartsRoutes = null;
-let appSettingsRoutes = null;
+let chartsRoutes = null
+let appSettingsRoutes = null
 
 try {
   chartsRoutes = require("./routes/charts")
@@ -146,10 +152,10 @@ app.use("*", (req, res) => {
     "/api/super-admin/*",
     "/api/upload/*",
   ]
-  
+
   if (chartsRoutes) availableEndpoints.push("/api/charts/*")
   if (appSettingsRoutes) availableEndpoints.push("/api/app-settings/*")
-  
+
   res.status(404).json({
     success: false,
     error: "Endpoint not found",
