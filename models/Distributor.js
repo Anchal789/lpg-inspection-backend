@@ -1,5 +1,33 @@
 const mongoose = require("mongoose")
 
+const appSettingsSchema = new mongoose.Schema({
+  hotplateName: {
+    type: String,
+    default: "Hi-star Hotplate",
+    trim: true,
+  },
+  hotplatePrice: {
+    type: Number,
+    default: 2500,
+    min: 0,
+  },
+  portablePlatformName: {
+    type: String,
+    default: "Portable Kitchen Platform",
+    trim: true,
+  },
+  portablePlatformPrice: {
+    type: Number,
+    default: 1500,
+    min: 0,
+  },
+  hotplateExchangeRate: {
+    type: Number,
+    default: 450,
+    min: 0,
+  },
+}, { _id: false })
+
 const distributorSchema = new mongoose.Schema(
   {
     sapCode: {
@@ -49,6 +77,10 @@ const distributorSchema = new mongoose.Schema(
     inspectionsCount: {
       type: Number,
       default: 0,
+    },
+     appSettings: {
+      type: appSettingsSchema,
+      default: () => ({}), // This will use the defaults from appSettingsSchema
     },
   },
   {

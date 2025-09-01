@@ -38,7 +38,7 @@ router.get(
 				Inspection.find()
 					.populate("distributorId", "agencyName")
 					.populate("deliveryManId", "name")
-					.populate("productId", "name")
+					.populate("products.productId", "name")
 					.sort({ createdAt: -1 })
 					.limit(10),
 			]);
@@ -63,7 +63,7 @@ router.get(
 				Product.countDocuments({ distributorId }),
 				Inspection.find({ distributorId })
 					.populate("deliveryManId", "name")
-					.populate("productId", "name")
+					.populate("products.productId", "name")
 					.sort({ createdAt: -1 })
 					.limit(10),
 			]);
@@ -93,7 +93,7 @@ router.get(
 				await Promise.all([
 					Inspection.countDocuments({ deliveryManId }),
 					Inspection.find({ deliveryManId })
-						.populate("productId", "name")
+						.populate("products.productId", "name")
 						.sort({ createdAt: -1 })
 						.limit(10),
 					DeliveryMan.countDocuments(),
@@ -127,7 +127,7 @@ router.get(
 		const recentInspections = await Inspection.find(query)
 			.populate("distributorId", "agencyName")
 			.populate("deliveryManId", "name")
-			.populate("productId", "name type")
+			.populate("products.productId", "name type")
 			.sort({ createdAt: -1 })
 			.limit(20);
 

@@ -54,6 +54,7 @@ const dashboardRoutes = require("./routes/dashboard")
 const superAdminRoutes = require("./routes/superAdmin")
 const uploadRoutes = require("./routes/upload")
 const chartsRoutes = require("./routes/charts")
+const appSettings = require("./routes/appSettings")
 
 // Mount Routes
 app.use("/api/auth", authRoutes)
@@ -64,6 +65,7 @@ app.use("/api/dashboard", dashboardRoutes)
 app.use("/api/super-admin", superAdminRoutes)
 app.use("/api/upload", uploadRoutes)
 app.use('/api/charts', chartsRoutes)
+app.use('/api/app-settings', appSettings)
 
 // Health check endpoint
 app.get("/api/health", (req, res) => {
@@ -84,6 +86,7 @@ app.get("/api/health", (req, res) => {
       dashboard: "/api/dashboard/*",
       superAdmin: "/api/super-admin/*",
       upload: "/api/upload/*",
+      appSettings: "/api/app-settings/*",
     },
   })
 })
@@ -107,6 +110,7 @@ app.get("/", (req, res) => {
       dashboard: "/api/dashboard/*",
       superAdmin: "/api/super-admin/*",
       upload: "/api/upload/*",
+      appSettings: "/api/app-settings/*",
     },
   })
 })
@@ -139,6 +143,7 @@ app.use("*", (req, res) => {
       "/api/dashboard/*",
       "/api/super-admin/*",
       "/api/upload/*",
+      "/api/app-settings/*",
     ],
   })
 })
@@ -165,6 +170,7 @@ app.listen(PORT, "0.0.0.0", () => {
   console.log(`   - GET  /api/delivery-men`)
   console.log(`   - POST /api/delivery-men`)
   console.log(`   - GET  /api/dashboard/stats`)
+  console.log(`   - GET  /api/app-settings/`)
 })
 
 module.exports = app

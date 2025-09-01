@@ -62,7 +62,6 @@ router.get(
       }),
     )
 
-    console.log("✅ Weekly chart data fetched:", weeklyData)
     return sendSuccess(res, { weeklyData }, "Weekly chart data fetched successfully")
   }),
 )

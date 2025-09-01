@@ -38,6 +38,7 @@ const deliveryManSchema = new mongoose.Schema(
         quantity: Number,
         price: Number,
         minPrice: Number,
+        name: String,
         assignedAt: {
           type: Date,
           default: Date.now,
