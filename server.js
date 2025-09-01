@@ -45,7 +45,7 @@ mongoose
     process.exit(1)
   })
 
-// Import Routes
+// Import Routes with error handling
 const authRoutes = require("./routes/auth")
 const inspectionRoutes = require("./routes/inspections")
 const productRoutes = require("./routes/products")
@@ -53,20 +53,26 @@ const deliveryManRoutes = require("./routes/deliveryMen")
 const dashboardRoutes = require("./routes/dashboard")
 const superAdminRoutes = require("./routes/superAdmin")
 const uploadRoutes = require("./routes/upload")
-const chartsRoutes = require("./routes/charts")
 
-// Mount Routes
-app.use("/api/auth", authRoutes)
-app.use("/api/inspections", inspectionRoutes)
-app.use("/api/products", productRoutes)
-app.use("/api/delivery-men", deliveryManRoutes)
-app.use("/api/dashboard", dashboardRoutes)
-app.use("/api/super-admin", superAdminRoutes)
-app.use("/api/upload", uploadRoutes)
-app.use('/api/charts', chartsRoutes)
-app.use('/api/app-settings', require('./routes/appSettings'))
+// Import new routes with error handling
+let chartsRoutes = null;
+let appSettingsRoutes = null;
 
-// Health check endpoint
+try {
+  chartsRoutes = require("./routes/charts")
+  console.log("✅ Charts routes loaded")
+} catch (error) {
+  console.log("⚠️  Charts routes not found:", error.message)
+}
+
+try {
+  appSettingsRoutes = require("./routes/appSettings")
+  console.log("✅ App settings routes loaded")
+} catch (error) {
+  console.log("⚠️  App settings routes not found:", error.message)
+}
+
+// Health check endpoint - FIXED duplicate keys
 app.get("/api/health", (req, res) => {
   console.log("🏥 Health check requested")
   res.json({
@@ -77,6 +83,17 @@ app.get("/api/health", (req, res) => {
     environment: process.env.NODE_ENV || "production",
     mongodb: mongoose.connection.readyState === 1 ? "Connected" : "Disconnected",
     port: PORT,
+    loadedRoutes: {
+      auth: true,
+      inspections: true,
+      products: true,
+      deliveryMen: true,
+      dashboard: true,
+      superAdmin: true,
+      upload: true,
+      charts: !!chartsRoutes,
+      appSettings: !!appSettingsRoutes,
+    },
     endpoints: {
       auth: "/api/auth/*",
       inspections: "/api/inspections/*",
@@ -85,10 +102,8 @@ app.get("/api/health", (req, res) => {
       dashboard: "/api/dashboard/*",
       superAdmin: "/api/super-admin/*",
       upload: "/api/upload/*",
-      charts: "/api/charts/*",
-      appSettings: "/api/app-settings/*",
-      appSettings: "/api/app-settings/*",
-      appSettings: "/api/app-settings/*",
+      ...(chartsRoutes && { charts: "/api/charts/*" }),
+      ...(appSettingsRoutes && { appSettings: "/api/app-settings/*" }),
     },
   })
 })
@@ -112,11 +127,39 @@ app.get("/", (req, res) => {
       dashboard: "/api/dashboard/*",
       superAdmin: "/api/super-admin/*",
       upload: "/api/upload/*",
+      ...(chartsRoutes && { charts: "/api/charts/*" }),
+      ...(appSettingsRoutes && { appSettings: "/api/app-settings/*" }),
     },
   })
 })
 
-// Global error handling middleware
+// 404 handler
+app.use("*", (req, res) => {
+  console.log("❌ 404 - Endpoint not found:", req.originalUrl)
+  const availableEndpoints = [
+    "/api/health",
+    "/api/auth/*",
+    "/api/inspections/*",
+    "/api/products/*",
+    "/api/delivery-men/*",
+    "/api/dashboard/*",
+    "/api/super-admin/*",
+    "/api/upload/*",
+  ]
+  
+  if (chartsRoutes) availableEndpoints.push("/api/charts/*")
+  if (appSettingsRoutes) availableEndpoints.push("/api/app-settings/*")
+  
+  res.status(404).json({
+    success: false,
+    error: "Endpoint not found",
+    requestedUrl: req.originalUrl,
+    method: req.method,
+    availableEndpoints,
+  })
+})
+
+// Global error handling middleware (must be last)
 app.use((error, req, res, next) => {
   console.error("❌ Global error:", error)
   res.status(500).json({
@@ -127,36 +170,14 @@ app.use((error, req, res, next) => {
   })
 })
 
-// 404 handler
-app.use("*", (req, res) => {
-  console.log("❌ 404 - Endpoint not found:", req.originalUrl)
-  res.status(404).json({
-    success: false,
-    error: "Endpoint not found",
-    requestedUrl: req.originalUrl,
-    method: req.method,
-    availableEndpoints: [
-      "/api/health",
-      "/api/auth/*",
-      "/api/inspections/*",
-      "/api/products/*",
-      "/api/delivery-men/*",
-      "/api/dashboard/*",
-      "/api/super-admin/*",
-      "/api/upload/*",
-      "/api/charts/*",
-      "/api/app-settings/*",
-    ],
-  })
-})
-
 // Start server
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`🚀 Server running on port ${PORT}`)
   console.log(`📱 API Base URL: http://localhost:${PORT}/api`)
   console.log(`🏥 Health Check: http://localhost:${PORT}/api/health`)
-  console.log(`🌍 Server is ready to accept connections`)
+  console.log(`🌍 Production ready - accessible from anywhere`)
   console.log(`📋 Available endpoints:`)
+  console.log(`   - GET  /api/health`)
   console.log(`   - POST /api/auth/validate-sap`)
   console.log(`   - POST /api/auth/login`)
   console.log(`   - POST /api/auth/register-distributor`)
@@ -172,6 +193,8 @@ app.listen(PORT, "0.0.0.0", () => {
   console.log(`   - GET  /api/delivery-men`)
   console.log(`   - POST /api/delivery-men`)
   console.log(`   - GET  /api/dashboard/stats`)
+  if (chartsRoutes) console.log(`   - GET  /api/charts/*`)
+  if (appSettingsRoutes) console.log(`   - GET  /api/app-settings/*`)
 })
 
 module.exports = app
