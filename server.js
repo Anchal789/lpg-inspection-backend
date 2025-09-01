@@ -34,24 +34,18 @@ app.options("*", (req, res) => {
 
 // MongoDB Connection
 console.log("🔗 Connecting to MongoDB...")
+mongoose
+  .connect(process.env.MONGODB_CONNECTION_STRING, {
+    useNewUrlParser: true,
+    useUnifiedTopology: true,
+  })
+  .then(() => console.log("✅ Connected to MongoDB Atlas"))
+  .catch((error) => {
+    console.error("❌ MongoDB connection error:", error)
+    process.exit(1)
+  })
 
-const connectWithRetry = async () => {
-  try {
-    await mongoose.connect(process.env.MONGODB_CONNECTION_STRING, {
-      useNewUrlParser: true,
-      useUnifiedTopology: true,
-    })
-    console.log("✅ Connected to MongoDB Atlas")
-  } catch (error) {
-    console.error("❌ MongoDB connection error (will retry):", error.message)
-    // Wait 5s and retry without exiting; healthcheck will still return 200 with mongodb: "Disconnected"
-    setTimeout(connectWithRetry, 5000)
-  }
-}
-
-connectWithRetry()
-
-// Import Routes with error handling
+// Import Routes
 const authRoutes = require("./routes/auth")
 const inspectionRoutes = require("./routes/inspections")
 const productRoutes = require("./routes/products")
@@ -59,26 +53,21 @@ const deliveryManRoutes = require("./routes/deliveryMen")
 const dashboardRoutes = require("./routes/dashboard")
 const superAdminRoutes = require("./routes/superAdmin")
 const uploadRoutes = require("./routes/upload")
+const appSettings = require("./routes/appSettings")
+const charts = require("./routes/charts")
 
-// Import new routes with error handling
-let chartsRoutes = null
-let appSettingsRoutes = null
+// Mount Routes
+app.use("/api/auth", authRoutes)
+app.use("/api/inspections", inspectionRoutes)
+app.use("/api/products", productRoutes)
+app.use("/api/delivery-men", deliveryManRoutes)
+app.use("/api/dashboard", dashboardRoutes)
+app.use("/api/super-admin", superAdminRoutes)
+app.use("/api/upload", uploadRoutes)
+app.use("/api/app-settings", appSettings)
+app.use("/api/charts", charts)
 
-try {
-  chartsRoutes = require("./routes/charts")
-  console.log("✅ Charts routes loaded")
-} catch (error) {
-  console.log("⚠️  Charts routes not found:", error.message)
-}
-
-try {
-  appSettingsRoutes = require("./routes/appSettings")
-  console.log("✅ App settings routes loaded")
-} catch (error) {
-  console.log("⚠️  App settings routes not found:", error.message)
-}
-
-// Health check endpoint - FIXED duplicate keys
+// Health check endpoint
 app.get("/api/health", (req, res) => {
   console.log("🏥 Health check requested")
   res.json({
@@ -89,17 +78,6 @@ app.get("/api/health", (req, res) => {
     environment: process.env.NODE_ENV || "production",
     mongodb: mongoose.connection.readyState === 1 ? "Connected" : "Disconnected",
     port: PORT,
-    loadedRoutes: {
-      auth: true,
-      inspections: true,
-      products: true,
-      deliveryMen: true,
-      dashboard: true,
-      superAdmin: true,
-      upload: true,
-      charts: !!chartsRoutes,
-      appSettings: !!appSettingsRoutes,
-    },
     endpoints: {
       auth: "/api/auth/*",
       inspections: "/api/inspections/*",
@@ -108,8 +86,8 @@ app.get("/api/health", (req, res) => {
       dashboard: "/api/dashboard/*",
       superAdmin: "/api/super-admin/*",
       upload: "/api/upload/*",
-      ...(chartsRoutes && { charts: "/api/charts/*" }),
-      ...(appSettingsRoutes && { appSettings: "/api/app-settings/*" }),
+      appSettings: "/api/app-settings/*",
+      charts: "/api/charts/*",
     },
   })
 })
@@ -133,39 +111,13 @@ app.get("/", (req, res) => {
       dashboard: "/api/dashboard/*",
       superAdmin: "/api/super-admin/*",
       upload: "/api/upload/*",
-      ...(chartsRoutes && { charts: "/api/charts/*" }),
-      ...(appSettingsRoutes && { appSettings: "/api/app-settings/*" }),
+      appSettings: "/api/app-settings/*",
+      charts: "/api/charts/*",
     },
   })
 })
 
-// 404 handler
-app.use("*", (req, res) => {
-  console.log("❌ 404 - Endpoint not found:", req.originalUrl)
-  const availableEndpoints = [
-    "/api/health",
-    "/api/auth/*",
-    "/api/inspections/*",
-    "/api/products/*",
-    "/api/delivery-men/*",
-    "/api/dashboard/*",
-    "/api/super-admin/*",
-    "/api/upload/*",
-  ]
-
-  if (chartsRoutes) availableEndpoints.push("/api/charts/*")
-  if (appSettingsRoutes) availableEndpoints.push("/api/app-settings/*")
-
-  res.status(404).json({
-    success: false,
-    error: "Endpoint not found",
-    requestedUrl: req.originalUrl,
-    method: req.method,
-    availableEndpoints,
-  })
-})
-
-// Global error handling middleware (must be last)
+// Global error handling middleware
 app.use((error, req, res, next) => {
   console.error("❌ Global error:", error)
   res.status(500).json({
@@ -176,14 +128,36 @@ app.use((error, req, res, next) => {
   })
 })
 
+// 404 handler
+app.use("*", (req, res) => {
+  console.log("❌ 404 - Endpoint not found:", req.originalUrl)
+  res.status(404).json({
+    success: false,
+    error: "Endpoint not found",
+    requestedUrl: req.originalUrl,
+    method: req.method,
+    availableEndpoints: [
+      "/api/health",
+      "/api/auth/*",
+      "/api/inspections/*",
+      "/api/products/*",
+      "/api/delivery-men/*",
+      "/api/dashboard/*",
+      "/api/super-admin/*",
+      "/api/upload/*",
+      "/api/app-settings/*",
+      "/api/charts/*",
+    ],
+  })
+})
+
 // Start server
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`🚀 Server running on port ${PORT}`)
   console.log(`📱 API Base URL: http://localhost:${PORT}/api`)
   console.log(`🏥 Health Check: http://localhost:${PORT}/api/health`)
-  console.log(`🌍 Production ready - accessible from anywhere`)
+  console.log(`🌍 Server is ready to accept connections`)
   console.log(`📋 Available endpoints:`)
-  console.log(`   - GET  /api/health`)
   console.log(`   - POST /api/auth/validate-sap`)
   console.log(`   - POST /api/auth/login`)
   console.log(`   - POST /api/auth/register-distributor`)
@@ -199,8 +173,8 @@ app.listen(PORT, "0.0.0.0", () => {
   console.log(`   - GET  /api/delivery-men`)
   console.log(`   - POST /api/delivery-men`)
   console.log(`   - GET  /api/dashboard/stats`)
-  if (chartsRoutes) console.log(`   - GET  /api/charts/*`)
-  if (appSettingsRoutes) console.log(`   - GET  /api/app-settings/*`)
+  console.log(`   - GET  /api/app-settings`)
+  console.log(`   - GET  /api/charts`)
 })
 
 module.exports = app
