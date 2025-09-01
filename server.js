@@ -1,10 +1,6 @@
 const express = require("express")
 const mongoose = require("mongoose")
 const cors = require("cors")
-const multer = require("multer")
-const AWS = require("aws-sdk")
-const jwt = require("jsonwebtoken")
-const bcrypt = require("bcryptjs")
 const path = require("path")
 require("dotenv").config()
 
@@ -15,28 +11,25 @@ console.log("🚀 Starting LPG Inspection Backend Server...")
 console.log("📍 Port:", PORT)
 console.log("🌍 Environment:", process.env.NODE_ENV || "production")
 
-// CORS Configuration - Production ready
-const corsOptions = {
-  origin: "*", // Allow all origins for mobile apps
-  credentials: false,
-  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
-  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept", "Origin"],
-  exposedHeaders: ["Authorization"],
-}
+// PRODUCTION CORS Configuration - Allows all origins for mobile apps
+app.use(
+  cors({
+    origin: "*",
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept", "Origin"],
+    credentials: false,
+  }),
+)
 
-// Middleware
-app.use(cors(corsOptions))
 app.use(express.json({ limit: "50mb" }))
 app.use(express.urlencoded({ extended: true, limit: "50mb" }))
 
-// Handle preflight requests for all routes
-app.options("*", cors(corsOptions))
-
-// AWS S3 Configuration (if needed)
-const s3 = new AWS.S3({
-  accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-  secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
-  region: process.env.AWS_REGION,
+// Handle preflight requests
+app.options("*", (req, res) => {
+  res.header("Access-Control-Allow-Origin", "*")
+  res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, PATCH")
+  res.header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, Accept, Origin")
+  res.sendStatus(200)
 })
 
 // MongoDB Connection
@@ -52,13 +45,6 @@ mongoose
     process.exit(1)
   })
 
-// Import Models
-const Distributor = require("./models/Distributor")
-const DeliveryMan = require("./models/DeliveryMan")
-const Product = require("./models/Product")
-const Inspection = require("./models/Inspection")
-const DistributorRequest = require("./models/DistributorRequest")
-
 // Import Routes
 const authRoutes = require("./routes/auth")
 const inspectionRoutes = require("./routes/inspections")
@@ -67,42 +53,7 @@ const deliveryManRoutes = require("./routes/deliveryMen")
 const dashboardRoutes = require("./routes/dashboard")
 const superAdminRoutes = require("./routes/superAdmin")
 const uploadRoutes = require("./routes/upload")
-
-// Import new routes (with error handling)
-let chartsRoutes, appSettingsRoutes;
-try {
-  chartsRoutes = require("./routes/charts")
-  console.log("✅ Charts routes loaded")
-} catch (error) {
-  console.log("⚠️  Charts routes not found, skipping...")
-  chartsRoutes = null
-}
-
-try {
-  appSettingsRoutes = require("./routes/appSettings")
-  console.log("✅ App settings routes loaded")
-} catch (error) {
-  console.log("⚠️  App settings routes not found, skipping...")
-  appSettingsRoutes = null
-}
-
-// Import the centralized error handler
-let globalErrorHandler;
-try {
-  globalErrorHandler = require("./utils/errorHandler")
-  console.log("✅ Global error handler loaded")
-} catch (error) {
-  console.log("⚠️  Global error handler not found, using default...")
-  globalErrorHandler = (error, req, res, next) => {
-    console.error("❌ Global error:", error)
-    res.status(500).json({
-      success: false,
-      error: "Internal server error",
-      message: error.message,
-      timestamp: new Date().toISOString(),
-    })
-  }
-}
+const chartsRoutes = require("./routes/charts")
 
 // Mount Routes
 app.use("/api/auth", authRoutes)
@@ -112,17 +63,8 @@ app.use("/api/delivery-men", deliveryManRoutes)
 app.use("/api/dashboard", dashboardRoutes)
 app.use("/api/super-admin", superAdminRoutes)
 app.use("/api/upload", uploadRoutes)
-
-// Mount new routes if they exist
-if (chartsRoutes) {
-  app.use("/api/charts", chartsRoutes)
-  console.log("✅ Charts routes mounted")
-}
-
-if (appSettingsRoutes) {
-  app.use("/api/app-settings", appSettingsRoutes)
-  console.log("✅ App settings routes mounted")
-}
+app.use('/api/charts', chartsRoutes)
+app.use('/api/app-settings', require('./routes/appSettings'))
 
 // Health check endpoint
 app.get("/api/health", (req, res) => {
@@ -135,17 +77,6 @@ app.get("/api/health", (req, res) => {
     environment: process.env.NODE_ENV || "production",
     mongodb: mongoose.connection.readyState === 1 ? "Connected" : "Disconnected",
     port: PORT,
-    loadedRoutes: {
-      auth: true,
-      inspections: true,
-      products: true,
-      deliveryMen: true,
-      dashboard: true,
-      superAdmin: true,
-      upload: true,
-      charts: !!chartsRoutes,
-      appSettings: !!appSettingsRoutes,
-    },
     endpoints: {
       auth: "/api/auth/*",
       inspections: "/api/inspections/*",
@@ -154,8 +85,10 @@ app.get("/api/health", (req, res) => {
       dashboard: "/api/dashboard/*",
       superAdmin: "/api/super-admin/*",
       upload: "/api/upload/*",
-      ...(chartsRoutes && { charts: "/api/charts/*" }),
-      ...(appSettingsRoutes && { appSettings: "/api/app-settings/*" }),
+      charts: "/api/charts/*",
+      appSettings: "/api/app-settings/*",
+      appSettings: "/api/app-settings/*",
+      appSettings: "/api/app-settings/*",
     },
   })
 })
@@ -179,49 +112,51 @@ app.get("/", (req, res) => {
       dashboard: "/api/dashboard/*",
       superAdmin: "/api/super-admin/*",
       upload: "/api/upload/*",
-      ...(chartsRoutes && { charts: "/api/charts/*" }),
-      ...(appSettingsRoutes && { appSettings: "/api/app-settings/*" }),
     },
+  })
+})
+
+// Global error handling middleware
+app.use((error, req, res, next) => {
+  console.error("❌ Global error:", error)
+  res.status(500).json({
+    success: false,
+    error: "Internal server error",
+    message: error.message,
+    timestamp: new Date().toISOString(),
   })
 })
 
 // 404 handler
 app.use("*", (req, res) => {
   console.log("❌ 404 - Endpoint not found:", req.originalUrl)
-  const availableEndpoints = [
-    "/api/health",
-    "/api/auth/*",
-    "/api/inspections/*",
-    "/api/products/*",
-    "/api/delivery-men/*",
-    "/api/dashboard/*",
-    "/api/super-admin/*",
-    "/api/upload/*",
-  ]
-  
-  if (chartsRoutes) availableEndpoints.push("/api/charts/*")
-  if (appSettingsRoutes) availableEndpoints.push("/api/app-settings/*")
-  
   res.status(404).json({
     success: false,
     error: "Endpoint not found",
     requestedUrl: req.originalUrl,
     method: req.method,
-    availableEndpoints,
+    availableEndpoints: [
+      "/api/health",
+      "/api/auth/*",
+      "/api/inspections/*",
+      "/api/products/*",
+      "/api/delivery-men/*",
+      "/api/dashboard/*",
+      "/api/super-admin/*",
+      "/api/upload/*",
+      "/api/charts/*",
+      "/api/app-settings/*",
+    ],
   })
 })
-
-// Global error handling middleware (must be last)
-app.use(globalErrorHandler)
 
 // Start server
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`🚀 Server running on port ${PORT}`)
   console.log(`📱 API Base URL: http://localhost:${PORT}/api`)
   console.log(`🏥 Health Check: http://localhost:${PORT}/api/health`)
-  console.log(`🌍 Production ready - accessible from anywhere`)
+  console.log(`🌍 Server is ready to accept connections`)
   console.log(`📋 Available endpoints:`)
-  console.log(`   - GET  /api/health`)
   console.log(`   - POST /api/auth/validate-sap`)
   console.log(`   - POST /api/auth/login`)
   console.log(`   - POST /api/auth/register-distributor`)
@@ -237,8 +172,6 @@ app.listen(PORT, "0.0.0.0", () => {
   console.log(`   - GET  /api/delivery-men`)
   console.log(`   - POST /api/delivery-men`)
   console.log(`   - GET  /api/dashboard/stats`)
-  if (chartsRoutes) console.log(`   - GET  /api/charts/*`)
-  if (appSettingsRoutes) console.log(`   - GET  /api/app-settings/*`)
 })
 
 module.exports = app
