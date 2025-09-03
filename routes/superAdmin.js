@@ -37,7 +37,7 @@ router.get(
 			Inspection.find()
 				.populate("distributorId", "agencyName")
 				.populate("deliveryManId", "name")
-				.populate("productId", "name")
+				.populate("products.productId", "name type")
 				.sort({ createdAt: -1 })
 				.limit(10),
 		]);
@@ -59,11 +59,11 @@ router.get(
 router.get(
 	"/distributor-requests",
 	asyncHandler(async (req, res) => {
-		console.log("📋 Fetching distributor requests");
+		// console.log("📋 Fetching distributor requests");
 
 		const requests = await DistributorRequest.find().sort({ createdAt: -1 });
 
-		console.log(`✅ Found ${requests.length} distributor requests`);
+		// console.log(`✅ Found ${requests.length} distributor requests`);
 		return sendSuccess(
 			res,
 			{ requests },
@@ -112,7 +112,7 @@ router.post(
 
 			await DeliveryMan.insertMany(deliveryMenData);
 
-			console.log("Inserted delivery men:", deliveryMenData);
+			// console.log("Inserted delivery men:", deliveryMenData);
 		}
 
 		// Update request status
@@ -139,7 +139,7 @@ router.post(
 	asyncHandler(async (req, res) => {
 		const { id } = req.params;
 		const { reason } = req.body;
-		console.log(" Rejecting distributor request:", id, "Reason:", reason);
+		// console.log(" Rejecting distributor request:", id, "Reason:", reason);
 
 		const request = await DistributorRequest.findById(id);
 		if (!request) {
@@ -159,7 +159,7 @@ router.post(
 		// Delete distributor's data
 		await Distributor.deleteOne({ _id: request.distributorId });
 
-		console.log(" Distributor request rejected and data deleted");
+		// console.log(" Distributor request rejected and data deleted");
 		return sendSuccess(res, null, "Distributor request rejected successfully");
 	})
 );
@@ -219,7 +219,7 @@ router.delete(
 	"/distributors/:id",
 	asyncHandler(async (req, res) => {
 		const { id } = req.params;
-		console.log("🗑️ Deleting distributor:", id);
+		// console.log("🗑️ Deleting distributor:", id);
 
 		const distributor = await Distributor.findById(id);
 		if (!distributor) {
@@ -238,7 +238,7 @@ router.delete(
 		// Delete distributor
 		await Distributor.findByIdAndDelete(id);
 
-		console.log("✅ Distributor and associated data deleted");
+		// console.log("✅ Distributor and associated data deleted");
 		return sendSuccess(res, null, "Distributor deleted successfully");
 	})
 );
