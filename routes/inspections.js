@@ -43,7 +43,7 @@ router.post(
 		} = req.body;
 
 		// Validate required fields
-		if (!consumerName || !mobileNumber || !address || !totalAmount) {
+		if (!consumerName || !mobileNumber || !address) {
 			return sendError(res, "Missing required fields", 400);
 		}
 

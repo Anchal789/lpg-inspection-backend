@@ -7,10 +7,6 @@ require("dotenv").config()
 const app = express()
 const PORT = process.env.PORT || 3000
 
-console.log("🚀 Starting LPG Inspection Backend Server...")
-console.log("📍 Port:", PORT)
-console.log("🌍 Environment:", process.env.NODE_ENV || "production")
-
 // PRODUCTION CORS Configuration - Allows all origins for mobile apps
 app.use(
   cors({
@@ -55,6 +51,7 @@ const superAdminRoutes = require("./routes/superAdmin")
 const uploadRoutes = require("./routes/upload")
 const appSettings = require("./routes/appSettings")
 const charts = require("./routes/charts")
+const exportRouter = require('./routes/export');
 
 // Mount Routes
 app.use("/api/auth", authRoutes)
@@ -66,10 +63,10 @@ app.use("/api/super-admin", superAdminRoutes)
 app.use("/api/upload", uploadRoutes)
 app.use("/api/app-settings", appSettings)
 app.use("/api/charts", charts)
+app.use('/api/export', exportRouter);
 
 // Health check endpoint
 app.get("/api/health", (req, res) => {
-  console.log("🏥 Health check requested")
   res.json({
     success: true,
     message: "LPG Inspection API is running",
@@ -88,13 +85,13 @@ app.get("/api/health", (req, res) => {
       upload: "/api/upload/*",
       appSettings: "/api/app-settings/*",
       charts: "/api/charts/*",
+      export: "/api/export/*",
     },
   })
 })
 
 // Root endpoint
 app.get("/", (req, res) => {
-  console.log("🏠 Root endpoint requested")
   res.json({
     success: true,
     message: "LPG Inspection API - Production Ready",
@@ -113,6 +110,7 @@ app.get("/", (req, res) => {
       upload: "/api/upload/*",
       appSettings: "/api/app-settings/*",
       charts: "/api/charts/*",
+      export: "/api/export/*",
     },
   })
 })
@@ -130,7 +128,6 @@ app.use((error, req, res, next) => {
 
 // 404 handler
 app.use("*", (req, res) => {
-  console.log("❌ 404 - Endpoint not found:", req.originalUrl)
   res.status(404).json({
     success: false,
     error: "Endpoint not found",
@@ -147,6 +144,7 @@ app.use("*", (req, res) => {
       "/api/upload/*",
       "/api/app-settings/*",
       "/api/charts/*",
+      "/api/export/*",
     ],
   })
 })
@@ -175,6 +173,7 @@ app.listen(PORT, "0.0.0.0", () => {
   console.log(`   - GET  /api/dashboard/stats`)
   console.log(`   - GET  /api/app-settings`)
   console.log(`   - GET  /api/charts`)
+  console.log(`   - GET  /api/export`)
 })
 
 module.exports = app
