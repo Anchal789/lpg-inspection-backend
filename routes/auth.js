@@ -12,7 +12,7 @@ const router = express.Router()
 
 // Super Admin Constants (with fallbacks)
 const SUPER_ADMIN_SAP_CODE = process.env.SUPER_ADMIN_SAP_CODE || "000000"
-const SUPER_ADMIN_PHONE = process.env.SUPER_ADMIN_PHONE || "9876543210"
+const SUPER_ADMIN_PHONE = process.env.SUPER_ADMIN_PHONE || "9479335528"
 const SUPER_ADMIN_PASSWORD = process.env.SUPER_ADMIN_PASSWORD || "admin123"
 const JWT_SECRET = process.env.JWT_SECRET || "your-secret-key"
 

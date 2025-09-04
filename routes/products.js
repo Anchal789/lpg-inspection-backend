@@ -14,7 +14,7 @@ router.get(
   "/",
   asyncHandler(async (req, res) => {
     const { type, distributorId } = req.user
-    const { page = 1, limit = 10, search, productType } = req.query
+    const { page = 1, limit = 100, search, productType } = req.query
 
     console.log("📋 Fetching products for:", type, distributorId)
 

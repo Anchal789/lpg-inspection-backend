@@ -27,7 +27,7 @@ router.get(
 	"/",
 	asyncHandler(async (req, res) => {
 		const { type, distributorId } = req.user;
-		const { page = 1, limit = 10, search } = req.query;
+		const { page = 1, limit = 200, search } = req.query;
 		const query = {};
 
 		// Filter based on user type
@@ -247,7 +247,6 @@ router.get(
 		const recentInspections = await Inspection.find({ deliveryManId: id })
 			.populate("products.productId", "name type")
 			.sort({ createdAt: -1 })
-			.limit(10);
 
 		const todayInspections = await Inspection.countDocuments({
 			deliveryManId: id,
@@ -314,7 +313,7 @@ router.post(
 		}
 
 		// Verify distributor exists
-		const distributor = await Distributor.findById(deliveryManDistributorId);
+		const distributor = await Distributor.findById(deliveryManDistributorId || distributorId);
 		if (!distributor) {
 			return sendError(res, "Distributor not found", 404);
 		}

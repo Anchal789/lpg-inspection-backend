@@ -200,7 +200,7 @@ router.get(
 	"/",
 	asyncHandler(async (req, res) => {
 		const { type, distributorId } = req.user;
-		const { page = 1, limit = 10, status, search } = req.query;
+		const { page = 1, limit = 10000, status, search } = req.query;
 
 		console.log("📋 Fetching inspections for:", type, distributorId);
 
